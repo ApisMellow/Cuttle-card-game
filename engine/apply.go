@@ -16,6 +16,9 @@ func LegalMoves(s GameState) []Move {
 	if s.Phase == PhaseGameOver {
 		return nil
 	}
+	if s.Phase == PhaseAwaitingCounter {
+		return legalCounterMoves(s)
+	}
 	if s.Phase != PhaseNormal {
 		// later phases handled in later tasks
 		return nil
@@ -140,26 +143,124 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		// Task 13: only Ace is implemented. Counter-2 logic arrives in Task 14.
+		// Task 13/14: only Ace is implemented as a one-off effect.
 		if m.Card.Rank != card.Ace {
 			return s, ErrIllegalMove
 		}
+		played := out.Active
 		p.Hand = removeAt(p.Hand, m.HandIndex)
-		out.Scrap = append(out.Scrap, m.Card)
-		// Scrap all point cards on both sides, including any Jack stacks.
-		for i := 0; i < 2; i++ {
-			pl := &out.Players[i]
-			for _, pe := range pl.Points {
-				out.Scrap = append(out.Scrap, pe.Card)
-				out.Scrap = append(out.Scrap, pe.JackStack...)
-			}
-			pl.Points = nil
-		}
 		out.PassesInARow = 0
-		endTurn(&out)
+		// If the opponent has a non-frozen 2, enter PhaseAwaitingCounter.
+		opp := played.Other()
+		if hasLegalCounter(out.Players[opp]) {
+			out.Pending = &PendingOneOff{
+				PlayedBy: played,
+				Card:     m.Card,
+			}
+			out.Phase = PhaseAwaitingCounter
+			out.Active = opp
+			return out, nil
+		}
+		resolveOneOff(&out, m.Card, played)
+		return out, nil
+	case MoveCounter:
+		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
+			return s, ErrIllegalMove
+		}
+		p := &out.Players[out.Active]
+		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if m.Card.Rank != card.Two {
+			return s, ErrIllegalMove
+		}
+		if p.FrozenIDs[m.HandIndex] {
+			return s, ErrIllegalMove
+		}
+		p.Hand = removeAt(p.Hand, m.HandIndex)
+		out.Pending.CounterChain = append(out.Pending.CounterChain, m.Card)
+		// Flip waiting player; if they can counter, stay in phase; else auto-resolve.
+		next := out.Active.Other()
+		if hasLegalCounter(out.Players[next]) {
+			out.Active = next
+			return out, nil
+		}
+		resolvePending(&out)
+		return out, nil
+	case MoveDecline:
+		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
+			return s, ErrIllegalMove
+		}
+		resolvePending(&out)
 		return out, nil
 	}
 	return s, ErrIllegalMove
+}
+
+// hasLegalCounter reports whether p has any non-frozen 2 in hand.
+func hasLegalCounter(p PlayerState) bool {
+	for i, c := range p.Hand {
+		if c.Rank == card.Two && !p.FrozenIDs[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// legalCounterMoves lists decline + one MoveCounter per legal 2.
+func legalCounterMoves(s GameState) []Move {
+	moves := []Move{{Kind: MoveDecline}}
+	p := s.Players[s.Active]
+	for i, c := range p.Hand {
+		if c.Rank == card.Two && !p.FrozenIDs[i] {
+			moves = append(moves, Move{Kind: MoveCounter, Card: c, HandIndex: i})
+		}
+	}
+	return moves
+}
+
+// resolvePending finalizes a counter chain: even len → resolve, odd → cancel.
+// Either way, the original card and every 2 in the chain go to scrap, then
+// control returns to the original player and endTurn runs.
+func resolvePending(s *GameState) {
+	pend := s.Pending
+	s.Pending = nil
+	s.Phase = PhaseNormal
+	s.Active = pend.PlayedBy
+	cancelled := len(pend.CounterChain)%2 == 1
+	if cancelled {
+		// Card is cancelled; just scrap original + chain.
+		s.Scrap = append(s.Scrap, pend.Card)
+		s.Scrap = append(s.Scrap, pend.CounterChain...)
+		endTurn(s)
+		return
+	}
+	// Resolve the original one-off's effect. The chain 2s go to scrap alongside.
+	resolveOneOff(s, pend.Card, pend.PlayedBy)
+	// Append the chain 2s to scrap (resolveOneOff already scrapped the original + effect).
+	s.Scrap = append(s.Scrap, pend.CounterChain...)
+}
+
+// resolveOneOff applies the effect of a one-off card played by `played` and
+// scraps the card itself, runs win check, and ends the turn.
+func resolveOneOff(s *GameState, c card.Card, played PlayerID) {
+	s.Active = played
+	s.Scrap = append(s.Scrap, c)
+	switch c.Rank {
+	case card.Ace:
+		for i := 0; i < 2; i++ {
+			pl := &s.Players[i]
+			for _, pe := range pl.Points {
+				s.Scrap = append(s.Scrap, pe.Card)
+				s.Scrap = append(s.Scrap, pe.JackStack...)
+			}
+			pl.Points = nil
+		}
+	}
+	if checkWin(s, played) {
+		return
+	}
+	endTurn(s)
 }
 
 func removeAt[T any](xs []T, i int) []T {
