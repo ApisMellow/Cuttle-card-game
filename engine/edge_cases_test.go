@@ -55,6 +55,14 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("31_SevenRevealPointPlayWins", caseG31)
 		t.Run("32_JackChainStealPushesNewControllerOverThreshold", caseG32)
 	})
+	t.Run("H_Frozen", func(t *testing.T) {
+		t.Run("33a_FrozenCardCannotBePoint", caseH33a)
+		t.Run("33b_FrozenCardCannotBePermanent", caseH33b)
+		t.Run("33c_FrozenCardCannotScuttle", caseH33c)
+		t.Run("33d_FrozenCardCannotBeOneOff", caseH33d)
+		t.Run("33e_FrozenCardCannotCounter", caseH33e)
+		t.Run("34_FreezeClearsAtStartOfAffectedOwnNextTurn", caseH34)
+	})
 }
 
 // caseD16: 3 with empty scrap is not legal as a one-off. LegalMoves iterates
@@ -1604,5 +1612,216 @@ func caseG32(t *testing.T) {
 	}
 	if s2.Winner == nil || *s2.Winner != P1 {
 		t.Fatalf("expected Winner=P1, got %+v", s2.Winner)
+	}
+}
+
+// Category H — Frozen-card edges.
+//
+// Semantics (from RULES.md + engine/apply.go): a 9 one-off bounces an
+// opponent's field card back to their hand and marks that new hand index as
+// frozen. A frozen card cannot be played on the owner's next turn. The
+// frozen marks are cleared in endTurn for the player who becomes active
+// (apply.go:749), so the mark is set on P2 right after P1's 9 resolves and
+// persists through exactly P2's following own turn; it clears when P2
+// becomes active again on the turn after that.
+//
+// caseH33{a-e}: A frozen card cannot be played via any of the five move
+// paths — point, permanent, scuttle, one-off, or counter. The engine must
+// both omit the move from LegalMoves and reject it in Apply. We split the
+// "all five" requirement across sub-cases because a single rank cannot
+// plausibly cover every path: a Queen is permanent-only; a 2 covers
+// point/scuttle/one-off/counter but not permanent. We use a Queen for the
+// permanent path, a 3 (one-off-only resolver with no counter-phase noise
+// when opponent has no 2s) for the one-off path, and 2s elsewhere.
+//
+// JUDGMENT: RULES.md phrases the 9 effect as "cannot be played on their
+// next turn" without enumerating move kinds. The engine-side check in
+// LegalMoves (apply.go:38) skips the frozen hand index for every emitted
+// move kind, which is the natural reading. Apply must also refuse an
+// explicit frozen play — relying on LegalMoves filtering alone is unsafe
+// for callers that construct moves directly.
+
+func caseH33a(t *testing.T) {
+	// Frozen 2 cannot be played as a point card.
+	frozen := card.Card{Rank: card.Two, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{frozen}, nil, nil)
+	s.Players[P1].FrozenIDs = map[int]bool{0: true}
+
+	for _, m := range LegalMoves(s) {
+		if m.Kind == MovePlayPoint && m.HandIndex == 0 {
+			t.Errorf("frozen 2 must not appear as MovePlayPoint, got %+v", m)
+		}
+	}
+	if _, err := Apply(s, Move{Kind: MovePlayPoint, Card: frozen, HandIndex: 0}); err == nil {
+		t.Error("Apply(MovePlayPoint) on frozen card should be rejected")
+	}
+}
+
+func caseH33b(t *testing.T) {
+	// Frozen Queen cannot be played as a permanent.
+	frozen := card.Card{Rank: card.Queen, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{frozen}, nil, nil)
+	s.Players[P1].FrozenIDs = map[int]bool{0: true}
+
+	for _, m := range LegalMoves(s) {
+		if m.Kind == MovePlayPermanent && m.HandIndex == 0 {
+			t.Errorf("frozen Queen must not appear as MovePlayPermanent, got %+v", m)
+		}
+	}
+	if _, err := Apply(s, Move{Kind: MovePlayPermanent, Card: frozen, HandIndex: 0}); err == nil {
+		t.Error("Apply(MovePlayPermanent) on frozen card should be rejected")
+	}
+}
+
+func caseH33c(t *testing.T) {
+	// Frozen 2 cannot scuttle an opponent's lower-rank point card.
+	frozen := card.Card{Rank: card.Two, Suit: card.Spades}
+	target := card.Card{Rank: card.Ace, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{frozen}, nil, nil)
+	s.Players[P1].FrozenIDs = map[int]bool{0: true}
+	s.Players[P2].Points = []PointEntry{{Card: target, Owner: P2}}
+
+	for _, m := range LegalMoves(s) {
+		if m.Kind == MoveScuttle && m.HandIndex == 0 {
+			t.Errorf("frozen 2 must not appear as MoveScuttle, got %+v", m)
+		}
+	}
+	tgt := &Target{Owner: P2, Zone: ZonePoints, Index: 0}
+	if _, err := Apply(s, Move{Kind: MoveScuttle, Card: frozen, HandIndex: 0, Target: tgt}); err == nil {
+		t.Error("Apply(MoveScuttle) with frozen attacker should be rejected")
+	}
+}
+
+func caseH33d(t *testing.T) {
+	// Frozen 3 cannot be played as a one-off. Using a 3 keeps the setup
+	// tight: one-off-only rank (apart from point-play fallback), scrap has
+	// one item so the effect is otherwise legal, and opponent has no 2 so
+	// there's no counter-phase bookkeeping to untangle.
+	frozen := card.Card{Rank: card.Three, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{frozen}, nil, nil)
+	s.Players[P1].FrozenIDs = map[int]bool{0: true}
+	s.Scrap = []card.Card{{Rank: card.Ten, Suit: card.Diamonds}}
+
+	for _, m := range LegalMoves(s) {
+		if m.Kind == MoveOneOff && m.HandIndex == 0 {
+			t.Errorf("frozen 3 must not appear as MoveOneOff, got %+v", m)
+		}
+	}
+	if _, err := Apply(s, Move{Kind: MoveOneOff, Card: frozen, HandIndex: 0, ScrapIndex: 0}); err == nil {
+		t.Error("Apply(MoveOneOff) on frozen card should be rejected")
+	}
+}
+
+func caseH33e(t *testing.T) {
+	// Frozen 2 cannot be played as a counter. P1 plays an Ace (one-off);
+	// P2 holds one frozen 2 and one free 2, so the counter phase opens and
+	// the frozen 2 must be unavailable as a counter both in LegalMoves and
+	// in Apply. This overlaps caseE21 on the LegalMoves side by design —
+	// Category H enumerates all five play paths including counter.
+	ace := card.Card{Rank: card.Ace, Suit: card.Spades}
+	frozenTwo := card.Card{Rank: card.Two, Suit: card.Hearts}
+	freeTwo := card.Card{Rank: card.Two, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{ace}, []card.Card{frozenTwo, freeTwo}, nil)
+	s.Players[P2].FrozenIDs = map[int]bool{0: true}
+	s.Players[P1].Points = []PointEntry{
+		{Card: card.Card{Rank: card.Seven, Suit: card.Diamonds}, Owner: P1},
+	}
+
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 plays ace: %v", err)
+	}
+	if s1.Phase != PhaseAwaitingCounter {
+		t.Fatalf("expected PhaseAwaitingCounter, got phase=%d", s1.Phase)
+	}
+	for _, m := range LegalMoves(s1) {
+		if m.Kind == MoveCounter && m.HandIndex == 0 {
+			t.Errorf("frozen 2 must not appear as MoveCounter, got %+v", m)
+		}
+	}
+	if _, err := Apply(s1, Move{Kind: MoveCounter, Card: frozenTwo, HandIndex: 0}); err == nil {
+		t.Error("Apply(MoveCounter) with frozen 2 should be rejected")
+	}
+}
+
+// caseH34: Freeze clears at the start of the affected player's *own* next
+// turn, meaning: the freeze is set when the 9 resolves and P2 becomes
+// active; it persists for all of P2's current turn (the "affected" one);
+// after P2 acts, P1 takes a turn — P2's freeze marks are still set while
+// P1 is active; then when P2 becomes active again, endTurn clears them.
+//
+// Sequence verified below:
+//  1. P1 plays 9 targeting P2's point card. Active transitions to P2 with
+//     the bounced card frozen in P2's hand.
+//  2. Snapshot s1: Active=P2, bounced card frozen. Cannot be played.
+//  3. P2 passes. Active=P1. P2's freeze marks MUST still be set (they only
+//     clear when P2 re-becomes active).
+//  4. P1 passes. Active=P2 again. Freeze marks now cleared.
+//
+// JUDGMENT: RULES.md does not spell out the clear point; engine code at
+// apply.go:746-750 (endTurn clears the new active player's FrozenIDs) is
+// the authority. nine_test already verifies steps 1-4 minimally; this case
+// adds the intermediate assertion that marks are NOT cleared merely when
+// the opponent takes their turn — they specifically clear at the affected
+// player's next own turn start.
+func caseH34(t *testing.T) {
+	nine := card.Card{Rank: card.Nine, Suit: card.Spades}
+	victim := card.Card{Rank: card.Seven, Suit: card.Diamonds}
+	s := twoPlayerStart([]card.Card{nine}, nil, nil)
+	s.Players[P2].Points = []PointEntry{{Card: victim, Owner: P2}}
+
+	// Step 1: P1 plays 9 on P2's point.
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: nine, HandIndex: 0,
+		Target: &Target{Owner: P2, Zone: ZonePoints, Index: 0}})
+	if err != nil {
+		t.Fatalf("P1 plays 9: %v", err)
+	}
+	if s1.Active != P2 {
+		t.Fatalf("expected Active=P2, got %v", s1.Active)
+	}
+	// Locate the bounced card in P2's hand and confirm it's frozen.
+	idx := -1
+	for i, c := range s1.Players[P2].Hand {
+		if c == victim {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("bounced card not found in P2 hand")
+	}
+	if !s1.Players[P2].FrozenIDs[idx] {
+		t.Fatalf("expected P2 hand idx %d frozen, got %+v", idx, s1.Players[P2].FrozenIDs)
+	}
+	// LegalMoves for P2 must not include any play of that frozen card.
+	for _, m := range LegalMoves(s1) {
+		if m.HandIndex == idx && (m.Kind == MovePlayPoint || m.Kind == MovePlayPermanent || m.Kind == MoveScuttle || m.Kind == MoveOneOff) {
+			t.Errorf("frozen bounced card must not be playable, got %+v", m)
+		}
+	}
+
+	// Step 2: P2 passes. Active=P1 now. P2's freeze marks MUST persist —
+	// endTurn clears the NEW active player's marks (P1), not P2's.
+	s2, err := Apply(s1, Move{Kind: MovePass})
+	if err != nil {
+		t.Fatalf("P2 pass: %v", err)
+	}
+	if s2.Active != P1 {
+		t.Fatalf("expected Active=P1 after P2 pass, got %v", s2.Active)
+	}
+	if !s2.Players[P2].FrozenIDs[idx] {
+		t.Errorf("freeze must persist through opponent's intervening turn; P2.FrozenIDs=%+v", s2.Players[P2].FrozenIDs)
+	}
+
+	// Step 3: P1 passes. Active=P2 again — freeze clears now.
+	s3, err := Apply(s2, Move{Kind: MovePass})
+	if err != nil {
+		t.Fatalf("P1 pass: %v", err)
+	}
+	if s3.Active != P2 {
+		t.Fatalf("expected Active=P2, got %v", s3.Active)
+	}
+	if s3.Players[P2].FrozenIDs[idx] {
+		t.Errorf("freeze should have cleared at start of P2's own next turn, got %+v", s3.Players[P2].FrozenIDs)
 	}
 }
