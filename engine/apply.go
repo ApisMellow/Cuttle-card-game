@@ -32,6 +32,9 @@ func LegalMoves(s GameState) []Move {
 		if c.Rank >= card.Ace && c.Rank <= card.Ten {
 			moves = append(moves, Move{Kind: MovePlayPoint, Card: c, HandIndex: i})
 		}
+		if c.Rank == card.Queen || c.Rank == card.King || c.Rank == card.Eight {
+			moves = append(moves, Move{Kind: MovePlayPermanent, Card: c, HandIndex: i})
+		}
 	}
 	if len(moves) == 0 {
 		moves = append(moves, Move{Kind: MovePass})
@@ -74,6 +77,23 @@ func Apply(s GameState, m Move) (GameState, error) {
 		}
 		p.Hand = removeAt(p.Hand, m.HandIndex)
 		p.Points = append(p.Points, PointEntry{Card: m.Card, Owner: out.Active})
+		out.PassesInARow = 0
+		if checkWin(&out, out.Active) {
+			return out, nil
+		}
+		endTurn(&out)
+		return out, nil
+	case MovePlayPermanent:
+		p := &out.Players[out.Active]
+		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if m.Card.Rank != card.Queen && m.Card.Rank != card.King && m.Card.Rank != card.Eight {
+			// Jacks handled in a later task
+			return s, ErrIllegalMove
+		}
+		p.Hand = removeAt(p.Hand, m.HandIndex)
+		p.Permanents = append(p.Permanents, m.Card)
 		out.PassesInARow = 0
 		if checkWin(&out, out.Active) {
 			return out, nil
