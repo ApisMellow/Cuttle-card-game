@@ -1,6 +1,10 @@
 package engine
 
-import "github.com/ApisMellow/cuttle/card"
+import (
+	"fmt"
+
+	"github.com/ApisMellow/cuttle/card"
+)
 
 type MoveKind uint8
 
@@ -27,4 +31,40 @@ type Move struct {
 	DiscardA   int     // for MoveDiscardPair: hand indices to discard
 	DiscardB   int
 	SubMove    *Move // for MoveSevenPick
+}
+
+func (m Move) Describe(s GameState) string {
+	switch m.Kind {
+	case MoveDraw:
+		return "draw a card"
+	case MovePass:
+		return "pass"
+	case MovePlayPoint:
+		return fmt.Sprintf("play %s as point card", m.Card)
+	case MovePlayPermanent:
+		if m.Card.Rank == card.Jack {
+			return fmt.Sprintf("play %s (steal opponent point)", m.Card)
+		}
+		return fmt.Sprintf("play %s as permanent", m.Card)
+	case MoveScuttle:
+		if m.Target != nil {
+			tc := s.Players[m.Target.Owner].Points[m.Target.Index].Card
+			return fmt.Sprintf("scuttle opponent's %s with %s", tc, m.Card)
+		}
+		return fmt.Sprintf("scuttle with %s", m.Card)
+	case MoveOneOff:
+		return fmt.Sprintf("play %s as one-off", m.Card)
+	case MoveCounter:
+		return fmt.Sprintf("counter with %s", m.Card)
+	case MoveDecline:
+		return "decline to counter"
+	case MoveSevenPick:
+		if m.SubMove != nil {
+			return fmt.Sprintf("7: %s", m.SubMove.Describe(s))
+		}
+		return "7: pick"
+	case MoveDiscardPair:
+		return fmt.Sprintf("discard hand[%d] and hand[%d]", m.DiscardA, m.DiscardB)
+	}
+	return "?"
 }
