@@ -1404,7 +1404,7 @@ func caseF28(t *testing.T) {
 		t.Fatalf("P2 play 5 as point: %v", err)
 	}
 	if s2.Active != P1 {
-		t.Fatalf("expected P1 active after P2 pass, got %v", s2.Active)
+		t.Fatalf("expected P1 active after P2 play 5, got %v", s2.Active)
 	}
 	// P1's LegalMoves should now include a Jack play targeting P2's point.
 	moves := LegalMoves(s2)

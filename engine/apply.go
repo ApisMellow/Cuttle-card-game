@@ -158,8 +158,8 @@ func Apply(s GameState, m Move) (GameState, error) {
 		// enforces the same gate so callers cannot march toward stalemate
 		// while real moves remain.
 		if s.Phase == PhaseNormal {
-			for _, m := range LegalMoves(s) {
-				if m.Kind != MovePass {
+			for _, lm := range LegalMoves(s) {
+				if lm.Kind != MovePass {
 					return s, ErrIllegalMove
 				}
 			}
