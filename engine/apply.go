@@ -35,6 +35,20 @@ func LegalMoves(s GameState) []Move {
 		if c.Rank == card.Ace || c.Rank == card.Six {
 			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
+		if c.Rank == card.Three {
+			// Three: take any one card from scrap into hand. One move per
+			// scrap card. No legal play if scrap is empty. Playing the 3
+			// removes it (-1) and takes a scrap card (+1), so the
+			// post-resolution hand size equals the pre-play hand size;
+			// we gate on that not exceeding HandLimit.
+			if len(active.Hand) <= HandLimit {
+				for si := range s.Scrap {
+					moves = append(moves, Move{
+						Kind: MoveOneOff, Card: c, HandIndex: i, ScrapIndex: si,
+					})
+				}
+			}
+		}
 		if c.Rank >= card.Ace && c.Rank <= card.Ten {
 			moves = append(moves, Move{Kind: MovePlayPoint, Card: c, HandIndex: i})
 			opp := s.Active.Other()
@@ -143,8 +157,13 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three {
 			return s, ErrIllegalMove
+		}
+		if m.Card.Rank == card.Three {
+			if m.ScrapIndex < 0 || m.ScrapIndex >= len(out.Scrap) {
+				return s, ErrIllegalMove
+			}
 		}
 		played := out.Active
 		p.Hand = removeAt(p.Hand, m.HandIndex)
@@ -153,14 +172,15 @@ func Apply(s GameState, m Move) (GameState, error) {
 		opp := played.Other()
 		if hasLegalCounter(out.Players[opp]) {
 			out.Pending = &PendingOneOff{
-				PlayedBy: played,
-				Card:     m.Card,
+				PlayedBy:   played,
+				Card:       m.Card,
+				ScrapIndex: m.ScrapIndex,
 			}
 			out.Phase = PhaseAwaitingCounter
 			out.Active = opp
 			return out, nil
 		}
-		resolveOneOff(&out, m.Card, played)
+		resolveOneOffWith(&out, m.Card, played, m.ScrapIndex)
 		return out, nil
 	case MoveCounter:
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
@@ -235,7 +255,7 @@ func resolvePending(s *GameState) {
 		return
 	}
 	// Resolve the original one-off's effect. The chain 2s go to scrap alongside.
-	resolveOneOff(s, pend.Card, pend.PlayedBy)
+	resolveOneOffWith(s, pend.Card, pend.PlayedBy, pend.ScrapIndex)
 	// Append the chain 2s to scrap (resolveOneOff already scrapped the original + effect).
 	s.Scrap = append(s.Scrap, pend.CounterChain...)
 }
@@ -243,7 +263,21 @@ func resolvePending(s *GameState) {
 // resolveOneOff applies the effect of a one-off card played by `played` and
 // scraps the card itself, runs win check, and ends the turn.
 func resolveOneOff(s *GameState, c card.Card, played PlayerID) {
+	resolveOneOffWith(s, c, played, 0)
+}
+
+func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex int) {
 	s.Active = played
+	// Three: take the chosen scrap card into the played-by player's hand
+	// BEFORE appending the 3 to scrap (so ScrapIndex still refers to the
+	// scrap pile as it existed when the move was chosen).
+	if c.Rank == card.Three {
+		if scrapIndex >= 0 && scrapIndex < len(s.Scrap) {
+			taken := s.Scrap[scrapIndex]
+			s.Scrap = removeAt(s.Scrap, scrapIndex)
+			s.Players[played].Hand = append(s.Players[played].Hand, taken)
+		}
+	}
 	s.Scrap = append(s.Scrap, c)
 	switch c.Rank {
 	case card.Ace:

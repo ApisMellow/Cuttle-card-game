@@ -63,6 +63,7 @@ type PendingOneOff struct {
 	PlayedBy     PlayerID
 	Card         card.Card
 	Target       *Target
+	ScrapIndex   int         // for 3: which scrap card to take if this resolves
 	Revealed     []card.Card // for 7
 	CounterChain []card.Card
 }
