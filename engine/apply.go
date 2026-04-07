@@ -22,6 +22,9 @@ func LegalMoves(s GameState) []Move {
 	if s.Phase == PhaseAwaitingDiscard {
 		return legalDiscardMoves(s)
 	}
+	if s.Phase == PhaseSevenChoosing {
+		return legalSevenPickMoves(s)
+	}
 	if s.Phase != PhaseNormal {
 		// later phases handled in later tasks
 		return nil
@@ -100,6 +103,9 @@ func LegalMoves(s GameState) []Move {
 					})
 				}
 			}
+		}
+		if c.Rank == card.Seven && len(s.Deck) > 0 {
+			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
 		if c.Rank == card.Queen || c.Rank == card.King || c.Rank == card.Eight {
 			moves = append(moves, Move{Kind: MovePlayPermanent, Card: c, HandIndex: i})
@@ -197,7 +203,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five && m.Card.Rank != card.Nine && m.Card.Rank != card.Two {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five && m.Card.Rank != card.Nine && m.Card.Rank != card.Two && m.Card.Rank != card.Seven {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank == card.Three {
@@ -321,6 +327,51 @@ func Apply(s GameState, m Move) (GameState, error) {
 		out.Active = played
 		endTurn(&out)
 		return out, nil
+	case MoveSevenPick:
+		if s.Phase != PhaseSevenChoosing || out.Pending == nil {
+			return s, ErrIllegalMove
+		}
+		if m.SubMove == nil {
+			return s, ErrIllegalMove
+		}
+		if m.SubMove.Kind == MoveDraw || m.SubMove.Kind == MovePass {
+			return s, ErrIllegalMove
+		}
+		rev := out.Pending.Revealed
+		chosenIdx := -1
+		for i, c := range rev {
+			if c == m.Card {
+				chosenIdx = i
+				break
+			}
+		}
+		if chosenIdx < 0 {
+			return s, ErrIllegalMove
+		}
+		played := out.Pending.PlayedBy
+		// Push unchosen (if any) back to top of deck.
+		var unchosen []card.Card
+		for i, c := range rev {
+			if i == chosenIdx {
+				continue
+			}
+			unchosen = append(unchosen, c)
+		}
+		if len(unchosen) > 0 {
+			out.Deck = append(append([]card.Card(nil), unchosen...), out.Deck...)
+		}
+		out.Pending = nil
+		out.Phase = PhaseNormal
+		out.Active = played
+		// Inject chosen card into the active player's hand at a known index,
+		// then dispatch the inner move with that HandIndex.
+		p := &out.Players[played]
+		injectIdx := len(p.Hand)
+		p.Hand = append(p.Hand, m.Card)
+		sub := *m.SubMove
+		sub.Card = m.Card
+		sub.HandIndex = injectIdx
+		return Apply(out, sub)
 	case MoveDecline:
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
 			return s, ErrIllegalMove
@@ -371,6 +422,53 @@ func legalDiscardMoves(s GameState) []Move {
 		}
 	}
 	return moves
+}
+
+// legalSevenPickMoves wraps each legal inner move for each revealed card as
+// MoveSevenPick. Draw and Pass are excluded. Frozen/queen rules are
+// inherited automatically via the reused LegalMoves enumeration.
+func legalSevenPickMoves(s GameState) []Move {
+	if s.Pending == nil {
+		return nil
+	}
+	var out []Move
+	for _, c := range s.Pending.Revealed {
+		for _, inner := range legalForCard(s, c) {
+			sub := inner
+			out = append(out, Move{Kind: MoveSevenPick, Card: c, SubMove: &sub})
+		}
+	}
+	return out
+}
+
+// legalForCard returns the legal moves the given card could make if it were
+// the only playable card in the active player's hand (for Seven resolution).
+// Draw and Pass are excluded.
+func legalForCard(s GameState, c card.Card) []Move {
+	faux := clone(s)
+	faux.Phase = PhaseNormal
+	faux.Pending = nil
+	p := &faux.Players[faux.Active]
+	// Pretend the active player has ONLY this card. Frozen marks are
+	// cleared for the injected position; existing field state is preserved.
+	p.Hand = []card.Card{c}
+	p.FrozenIDs = nil
+	// Also blank the deck presence isn't affected here; Seven's own deck
+	// reveal already mutated s.Deck. For inner enumeration we care about
+	// whether a 7 sub-pick can itself reveal — but we simply allow it if
+	// faux deck has cards, matching the real Seven-in-hand rule.
+	all := LegalMoves(faux)
+	var out []Move
+	for _, m := range all {
+		if m.Kind == MoveDraw || m.Kind == MovePass {
+			continue
+		}
+		if m.HandIndex != 0 {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // legalCounterMoves lists decline + one MoveCounter per legal 2.
@@ -521,6 +619,19 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 				tp.Points[target.Index] = pe
 			}
 		}
+	case card.Seven:
+		// Reveal up to top 2 deck cards into Pending.Revealed and enter
+		// PhaseSevenChoosing. The Seven itself has already been scrapped.
+		n := 2
+		if len(s.Deck) < n {
+			n = len(s.Deck)
+		}
+		revealed := append([]card.Card(nil), s.Deck[:n]...)
+		s.Deck = s.Deck[n:]
+		s.Pending = &PendingOneOff{PlayedBy: played, Card: c, Revealed: revealed}
+		s.Phase = PhaseSevenChoosing
+		s.Active = played
+		return
 	case card.Nine:
 		if target == nil {
 			break
