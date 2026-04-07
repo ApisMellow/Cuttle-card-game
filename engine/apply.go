@@ -152,6 +152,18 @@ func Apply(s GameState, m Move) (GameState, error) {
 		endTurn(&out)
 		return out, nil
 	case MovePass:
+		// Pass is only legal when the active player has no other action.
+		// LegalMoves emits MovePass solely as a fallback when no real move
+		// is available (apply.go LegalMoves: `if len(moves) == 0`); Apply
+		// enforces the same gate so callers cannot march toward stalemate
+		// while real moves remain.
+		if s.Phase == PhaseNormal {
+			for _, m := range LegalMoves(s) {
+				if m.Kind != MovePass {
+					return s, ErrIllegalMove
+				}
+			}
+		}
 		out.PassesInARow++
 		if out.PassesInARow >= 3 {
 			out.Phase = PhaseGameOver

@@ -1390,11 +1390,13 @@ func caseF28(t *testing.T) {
 	if s1.Active != P2 {
 		t.Fatalf("expected P2 to be active, got %v", s1.Active)
 	}
-	// P2 passes (only has a 5 in hand and an empty deck → must pass or play
-	// the 5; explicitly pass to hand control back to P1).
-	s2, err := Apply(s1, Move{Kind: MovePass})
+	// P2 plays its 5 as a point to hand control back to P1. (Pass is not
+	// legal here because P2 has a real action available; the rules permit
+	// passing only when no other move exists.)
+	five := card.Card{Rank: card.Five, Suit: card.Clubs}
+	s2, err := Apply(s1, Move{Kind: MovePlayPoint, Card: five, HandIndex: 0})
 	if err != nil {
-		t.Fatalf("P2 pass: %v", err)
+		t.Fatalf("P2 play 5 as point: %v", err)
 	}
 	if s2.Active != P1 {
 		t.Fatalf("expected P1 active after P2 pass, got %v", s2.Active)
