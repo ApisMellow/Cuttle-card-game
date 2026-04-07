@@ -31,6 +31,15 @@ func LegalMoves(s GameState) []Move {
 		}
 		if c.Rank >= card.Ace && c.Rank <= card.Ten {
 			moves = append(moves, Move{Kind: MovePlayPoint, Card: c, HandIndex: i})
+			opp := s.Active.Other()
+			for j, pe := range s.Players[opp].Points {
+				if c.Beats(pe.Card) {
+					moves = append(moves, Move{
+						Kind: MoveScuttle, Card: c, HandIndex: i,
+						Target: &Target{Owner: opp, Zone: ZonePoints, Index: j},
+					})
+				}
+			}
 		}
 		if c.Rank == card.Queen || c.Rank == card.King || c.Rank == card.Eight {
 			moves = append(moves, Move{Kind: MovePlayPermanent, Card: c, HandIndex: i})
@@ -98,6 +107,29 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if checkWin(&out, out.Active) {
 			return out, nil
 		}
+		endTurn(&out)
+		return out, nil
+	case MoveScuttle:
+		p := &out.Players[out.Active]
+		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if m.Target == nil || m.Target.Zone != ZonePoints {
+			return s, ErrIllegalMove
+		}
+		opp := &out.Players[m.Target.Owner]
+		if m.Target.Index < 0 || m.Target.Index >= len(opp.Points) {
+			return s, ErrIllegalMove
+		}
+		target := opp.Points[m.Target.Index]
+		if !m.Card.Beats(target.Card) {
+			return s, ErrIllegalMove
+		}
+		p.Hand = removeAt(p.Hand, m.HandIndex)
+		out.Scrap = append(out.Scrap, m.Card, target.Card)
+		out.Scrap = append(out.Scrap, target.JackStack...)
+		opp.Points = removeAt(opp.Points, m.Target.Index)
+		out.PassesInARow = 0
 		endTurn(&out)
 		return out, nil
 	}
