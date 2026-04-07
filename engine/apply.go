@@ -25,6 +25,14 @@ func LegalMoves(s GameState) []Move {
 	if len(s.Deck) > 0 && len(active.Hand) < HandLimit {
 		moves = append(moves, Move{Kind: MoveDraw})
 	}
+	for i, c := range active.Hand {
+		if active.FrozenIDs[i] {
+			continue
+		}
+		if c.Rank >= card.Ace && c.Rank <= card.Ten {
+			moves = append(moves, Move{Kind: MovePlayPoint, Card: c, HandIndex: i})
+		}
+	}
 	if len(moves) == 0 {
 		moves = append(moves, Move{Kind: MovePass})
 	}
@@ -56,8 +64,42 @@ func Apply(s GameState, m Move) (GameState, error) {
 		}
 		endTurn(&out)
 		return out, nil
+	case MovePlayPoint:
+		p := &out.Players[out.Active]
+		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if m.Card.Rank < card.Ace || m.Card.Rank > card.Ten {
+			return s, ErrIllegalMove
+		}
+		p.Hand = removeAt(p.Hand, m.HandIndex)
+		p.Points = append(p.Points, PointEntry{Card: m.Card, Owner: out.Active})
+		out.PassesInARow = 0
+		if checkWin(&out, out.Active) {
+			return out, nil
+		}
+		endTurn(&out)
+		return out, nil
 	}
 	return s, ErrIllegalMove
+}
+
+func removeAt[T any](xs []T, i int) []T {
+	out := make([]T, 0, len(xs)-1)
+	out = append(out, xs[:i]...)
+	out = append(out, xs[i+1:]...)
+	return out
+}
+
+// checkWin sets phase/winner if p has reached threshold. Returns true if game ended.
+func checkWin(s *GameState, p PlayerID) bool {
+	if HasWon(s.Players[p]) {
+		s.Phase = PhaseGameOver
+		winner := p
+		s.Winner = &winner
+		return true
+	}
+	return false
 }
 
 // endTurn advances Active and clears the new active player's frozen marks.
