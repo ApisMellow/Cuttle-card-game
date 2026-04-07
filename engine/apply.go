@@ -29,6 +29,9 @@ func LegalMoves(s GameState) []Move {
 		if active.FrozenIDs[i] {
 			continue
 		}
+		if c.Rank == card.Ace {
+			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
+		}
 		if c.Rank >= card.Ace && c.Rank <= card.Ten {
 			moves = append(moves, Move{Kind: MovePlayPoint, Card: c, HandIndex: i})
 			opp := s.Active.Other()
@@ -129,6 +132,29 @@ func Apply(s GameState, m Move) (GameState, error) {
 		out.Scrap = append(out.Scrap, m.Card, target.Card)
 		out.Scrap = append(out.Scrap, target.JackStack...)
 		opp.Points = removeAt(opp.Points, m.Target.Index)
+		out.PassesInARow = 0
+		endTurn(&out)
+		return out, nil
+	case MoveOneOff:
+		p := &out.Players[out.Active]
+		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		// Task 13: only Ace is implemented. Counter-2 logic arrives in Task 14.
+		if m.Card.Rank != card.Ace {
+			return s, ErrIllegalMove
+		}
+		p.Hand = removeAt(p.Hand, m.HandIndex)
+		out.Scrap = append(out.Scrap, m.Card)
+		// Scrap all point cards on both sides, including any Jack stacks.
+		for i := 0; i < 2; i++ {
+			pl := &out.Players[i]
+			for _, pe := range pl.Points {
+				out.Scrap = append(out.Scrap, pe.Card)
+				out.Scrap = append(out.Scrap, pe.JackStack...)
+			}
+			pl.Points = nil
+		}
 		out.PassesInARow = 0
 		endTurn(&out)
 		return out, nil
