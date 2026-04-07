@@ -8,14 +8,27 @@ import (
 
 var ErrIllegalMove = errors.New("illegal move")
 
+const HandLimit = 8
+
 // LegalMoves returns every legal move from the current state.
 // The REPL displays this list and the user picks one by index.
 func LegalMoves(s GameState) []Move {
 	if s.Phase == PhaseGameOver {
 		return nil
 	}
-	// Implemented incrementally in later tasks.
-	return nil
+	if s.Phase != PhaseNormal {
+		// later phases handled in later tasks
+		return nil
+	}
+	var moves []Move
+	active := s.Players[s.Active]
+	if len(s.Deck) > 0 && len(active.Hand) < HandLimit {
+		moves = append(moves, Move{Kind: MoveDraw})
+	}
+	if len(moves) == 0 {
+		moves = append(moves, Move{Kind: MovePass})
+	}
+	return moves
 }
 
 // Apply validates the move (must appear in LegalMoves(s)) and returns the new state.
@@ -23,8 +36,34 @@ func Apply(s GameState, m Move) (GameState, error) {
 	if s.Phase == PhaseGameOver {
 		return s, ErrIllegalMove
 	}
-	// Implemented incrementally in later tasks.
+	out := clone(s)
+	switch m.Kind {
+	case MoveDraw:
+		if len(out.Deck) == 0 || len(out.Players[out.Active].Hand) >= HandLimit {
+			return s, ErrIllegalMove
+		}
+		top := out.Deck[0]
+		out.Deck = out.Deck[1:]
+		out.Players[out.Active].Hand = append(out.Players[out.Active].Hand, top)
+		out.PassesInARow = 0
+		endTurn(&out)
+		return out, nil
+	case MovePass:
+		out.PassesInARow++
+		if out.PassesInARow >= 3 {
+			out.Phase = PhaseGameOver
+			return out, nil
+		}
+		endTurn(&out)
+		return out, nil
+	}
 	return s, ErrIllegalMove
+}
+
+// endTurn advances Active and clears the new active player's frozen marks.
+func endTurn(s *GameState) {
+	s.Active = s.Active.Other()
+	s.Players[s.Active].FrozenIDs = nil
 }
 
 func clone(s GameState) GameState {
