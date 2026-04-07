@@ -38,6 +38,32 @@ func LegalMoves(s GameState) []Move {
 		if c.Rank == card.Ace || c.Rank == card.Six || c.Rank == card.Four || c.Rank == card.Five {
 			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
+		if c.Rank == card.Two {
+			// 2-as-scrap: target one royal (Q/K), glasses-8, or Jack on
+			// a point stack on either side, subject to Queen protection.
+			for pl := 0; pl < 2; pl++ {
+				owner := PlayerID(pl)
+				hasQueen := ownerHasQueen(s.Players[owner])
+				for j, perm := range s.Players[owner].Permanents {
+					if hasQueen && perm.Rank != card.Queen {
+						continue
+					}
+					tgt := Target{Owner: owner, Zone: ZonePermanents, Index: j}
+					moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i, Target: &tgt})
+				}
+				for j, pe := range s.Players[owner].Points {
+					if len(pe.JackStack) == 0 {
+						continue
+					}
+					// Jack on point: queen on owner side protects it.
+					if hasQueen {
+						continue
+					}
+					tgt := Target{Owner: owner, Zone: ZonePoints, Index: j}
+					moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i, Target: &tgt})
+				}
+			}
+		}
 		if c.Rank == card.Nine {
 			opp := s.Active.Other()
 			for j := range s.Players[opp].Points {
@@ -171,11 +197,32 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five && m.Card.Rank != card.Nine {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five && m.Card.Rank != card.Nine && m.Card.Rank != card.Two {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank == card.Three {
 			if m.ScrapIndex < 0 || m.ScrapIndex >= len(out.Scrap) {
+				return s, ErrIllegalMove
+			}
+		}
+		if m.Card.Rank == card.Two {
+			if m.Target == nil {
+				return s, ErrIllegalMove
+			}
+			tp := &out.Players[m.Target.Owner]
+			switch m.Target.Zone {
+			case ZonePermanents:
+				if m.Target.Index < 0 || m.Target.Index >= len(tp.Permanents) {
+					return s, ErrIllegalMove
+				}
+			case ZonePoints:
+				if m.Target.Index < 0 || m.Target.Index >= len(tp.Points) {
+					return s, ErrIllegalMove
+				}
+				if len(tp.Points[m.Target.Index].JackStack) == 0 {
+					return s, ErrIllegalMove
+				}
+			default:
 				return s, ErrIllegalMove
 			}
 		}
@@ -282,6 +329,16 @@ func Apply(s GameState, m Move) (GameState, error) {
 		return out, nil
 	}
 	return s, ErrIllegalMove
+}
+
+// ownerHasQueen reports whether p has at least one Queen permanent.
+func ownerHasQueen(p PlayerState) bool {
+	for _, c := range p.Permanents {
+		if c.Rank == card.Queen {
+			return true
+		}
+	}
+	return false
 }
 
 // hasLegalCounter reports whether p has any non-frozen 2 in hand.
@@ -426,6 +483,43 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 		}
 		for i := 0; i < 2; i++ {
 			s.Players[i].Points = kept[i]
+		}
+	case card.Two:
+		if target == nil {
+			break
+		}
+		tp := &s.Players[target.Owner]
+		switch target.Zone {
+		case ZonePermanents:
+			if target.Index < 0 || target.Index >= len(tp.Permanents) {
+				break
+			}
+			scrapped := tp.Permanents[target.Index]
+			tp.Permanents = removeAt(tp.Permanents, target.Index)
+			s.Scrap = append(s.Scrap, scrapped)
+		case ZonePoints:
+			if target.Index < 0 || target.Index >= len(tp.Points) {
+				break
+			}
+			pe := tp.Points[target.Index]
+			if len(pe.JackStack) == 0 {
+				break
+			}
+			// Pop the top Jack.
+			top := pe.JackStack[len(pe.JackStack)-1]
+			pe.JackStack = pe.JackStack[:len(pe.JackStack)-1]
+			pe.JackOwners = pe.JackOwners[:len(pe.JackOwners)-1]
+			s.Scrap = append(s.Scrap, top)
+			if len(pe.JackStack) == 0 {
+				// Transplant point back to original Owner.
+				tp.Points = removeAt(tp.Points, target.Index)
+				s.Players[pe.Owner].Points = append(s.Players[pe.Owner].Points, pe)
+				if checkWin(s, pe.Owner) {
+					return
+				}
+			} else {
+				tp.Points[target.Index] = pe
+			}
 		}
 	case card.Nine:
 		if target == nil {
