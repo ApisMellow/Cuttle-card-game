@@ -35,7 +35,7 @@ func LegalMoves(s GameState) []Move {
 		if active.FrozenIDs[i] {
 			continue
 		}
-		if c.Rank == card.Ace || c.Rank == card.Six || c.Rank == card.Four {
+		if c.Rank == card.Ace || c.Rank == card.Six || c.Rank == card.Four || c.Rank == card.Five {
 			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
 		if c.Rank == card.Three {
@@ -160,7 +160,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank == card.Three {
@@ -348,6 +348,16 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 				s.Scrap = append(s.Scrap, pe.JackStack...)
 			}
 			pl.Points = nil
+		}
+	case card.Five:
+		// Draw up to 2 cards, respecting 8-card hand limit and deck size.
+		pl := &s.Players[played]
+		for i := 0; i < 2; i++ {
+			if len(s.Deck) == 0 || len(pl.Hand) >= HandLimit {
+				break
+			}
+			pl.Hand = append(pl.Hand, s.Deck[0])
+			s.Deck = s.Deck[1:]
 		}
 	case card.Four:
 		// Opponent discards 2 cards (or 1 if hand has 1, or 0 auto-resume).
