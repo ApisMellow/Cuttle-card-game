@@ -16,6 +16,188 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("4_Hand8SevenChoosingAllowed", caseA4)
 		t.Run("5_DrawToEightThenNoDrawNextOwnTurn", caseA5)
 	})
+	t.Run("B_DeckEdge", func(t *testing.T) {
+		t.Run("6_DeckEmptyPlayableNoDrawNoPass", caseB6)
+		t.Run("7_DeckEmptyUnplayableOnlyPass", caseB7)
+		t.Run("8_SevenWithDeckZeroNotLegal", caseB8)
+		t.Run("9_SevenWithDeckOneSingleReveal", caseB9)
+		t.Run("10_FiveWithDeckZeroLegalDrawsZero", caseB10)
+		t.Run("11_FiveWithDeckOneDrawsOne", caseB11)
+		t.Run("12_DrawLastDeckCard", caseB12)
+	})
+}
+
+// caseB6: Deck empty but the active player has a playable card in hand
+// (a point card). MoveDraw must not appear (gated on len(Deck) > 0) and
+// MovePass must not appear either (pass is only emitted when no other
+// legal moves exist). The player is forced to take a real action.
+func caseB6(t *testing.T) {
+	point := card.Card{Rank: card.Nine, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{point}, nil, nil)
+	moves := LegalMoves(s)
+	if containsKind(moves, MoveDraw) {
+		t.Error("MoveDraw should not be legal with empty deck")
+	}
+	if containsKind(moves, MovePass) {
+		t.Error("MovePass should not appear when a playable card exists")
+	}
+	if !containsKind(moves, MovePlayPoint) {
+		t.Errorf("expected MovePlayPoint to be legal, got %+v", moves)
+	}
+}
+
+// caseB7: Deck empty and the active player has zero playable cards.
+//
+// JUDGMENT: Per RULES.md, every A-10 is playable as a point card and
+// every J/Q/K/8 is playable as a permanent, so any non-empty hand has
+// at least one legal action. The only way to reach a "no playable
+// cards" situation is hand=0 AND deck=0. In that state LegalMoves must
+// return exactly {MovePass}. (Also note: since the opponent likewise
+// has nothing, this test is not interested in how the turn ultimately
+// terminates — only that MovePass is the sole offered move.)
+func caseB7(t *testing.T) {
+	s := twoPlayerStart(nil, nil, nil)
+	moves := LegalMoves(s)
+	if len(moves) != 1 || moves[0].Kind != MovePass {
+		t.Errorf("expected only MovePass, got %+v", moves)
+	}
+}
+
+// caseB8: Seven in hand with deck length 0 is not legal at all — no
+// reveals are possible. The gate in LegalMoves is
+// `c.Rank == card.Seven && len(s.Deck) > 0`.
+func caseB8(t *testing.T) {
+	seven := card.Card{Rank: card.Seven, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{seven}, nil, nil)
+	moves := LegalMoves(s)
+	for _, m := range moves {
+		if m.Kind == MoveOneOff && m.Card == seven {
+			t.Errorf("MoveOneOff for Seven should not be legal with deck=0, got %+v", m)
+		}
+	}
+}
+
+// caseB9: Seven in hand with deck length 1. Playing the 7 reveals one
+// card, enters PhaseSevenChoosing with Pending.Revealed holding exactly
+// one entry, and the LegalMoves menu contains MoveSevenPick entries
+// only for that single revealed card. (There may be multiple MoveSevenPick
+// entries — one per legal inner move — but all share the same Card.)
+func caseB9(t *testing.T) {
+	seven := card.Card{Rank: card.Seven, Suit: card.Spades}
+	revealed := card.Card{Rank: card.Nine, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{seven}, nil, []card.Card{revealed})
+	moves := LegalMoves(s)
+	playSeven, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MoveOneOff && m.Card == seven
+	})
+	if !ok {
+		t.Fatal("expected MoveOneOff Seven with deck=1")
+	}
+	s2, err := Apply(s, playSeven)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if s2.Phase != PhaseSevenChoosing {
+		t.Fatalf("expected PhaseSevenChoosing, got %v", s2.Phase)
+	}
+	if s2.Pending == nil || len(s2.Pending.Revealed) != 1 || s2.Pending.Revealed[0] != revealed {
+		t.Fatalf("expected exactly one revealed card (%v), got %+v", revealed, s2.Pending)
+	}
+	if len(s2.Deck) != 0 {
+		t.Errorf("deck should be empty after single reveal, got %d", len(s2.Deck))
+	}
+	pickMoves := LegalMoves(s2)
+	if len(pickMoves) == 0 {
+		t.Fatal("expected at least one MoveSevenPick")
+	}
+	for _, m := range pickMoves {
+		if m.Kind != MoveSevenPick {
+			t.Errorf("expected only MoveSevenPick entries, got %+v", m)
+		}
+		if m.Card != revealed {
+			t.Errorf("expected pick card to be %v, got %v", revealed, m.Card)
+		}
+	}
+}
+
+// caseB10: Five with deck length 0 is still legal (the 5's draw effect
+// respects deck size; drawing 0 is not an error). We assert the move is
+// legal and that applying it leaves the hand at 0 (the 5 itself was
+// removed and nothing was drawn) and deck still at 0.
+//
+// JUDGMENT: RULES.md describes the 5 as "Draw 2 cards... respecting the
+// 8-card limit"; it does not forbid playing the 5 when the deck is
+// empty. The engine's resolveOneOffWith for card.Five loops up to 2
+// times, breaking when `len(s.Deck) == 0`, so deck=0 yields draws=0.
+// This matches the spirit of a one-off whose side effect is bounded
+// rather than mandatory.
+func caseB10(t *testing.T) {
+	five := card.Card{Rank: card.Five, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{five}, nil, nil)
+	moves := LegalMoves(s)
+	playFive, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MoveOneOff && m.Card == five
+	})
+	if !ok {
+		t.Fatal("playing a 5 with deck=0 should be legal (draws 0)")
+	}
+	s2, err := Apply(s, playFive)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(s2.Players[P1].Hand) != 0 {
+		t.Errorf("hand should be 0 (5 scrapped, 0 drawn), got %d", len(s2.Players[P1].Hand))
+	}
+	if len(s2.Deck) != 0 {
+		t.Errorf("deck should still be 0, got %d", len(s2.Deck))
+	}
+}
+
+// caseB11: Five with deck length 1 draws exactly 1 card.
+func caseB11(t *testing.T) {
+	five := card.Card{Rank: card.Five, Suit: card.Spades}
+	only := card.Card{Rank: card.King, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{five}, nil, []card.Card{only})
+	moves := LegalMoves(s)
+	playFive, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MoveOneOff && m.Card == five
+	})
+	if !ok {
+		t.Fatal("expected MoveOneOff Five to be legal")
+	}
+	s2, err := Apply(s, playFive)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(s2.Players[P1].Hand) != 1 || s2.Players[P1].Hand[0] != only {
+		t.Errorf("expected hand to contain exactly the drawn card %v, got %+v", only, s2.Players[P1].Hand)
+	}
+	if len(s2.Deck) != 0 {
+		t.Errorf("deck should be empty after drawing last card, got %d", len(s2.Deck))
+	}
+}
+
+// caseB12: P1 draws the very last deck card. Deck becomes 0, the drawn
+// card is in P1's hand, and the turn has ended normally (active = P2).
+func caseB12(t *testing.T) {
+	top := card.Card{Rank: card.King, Suit: card.Spades}
+	s := twoPlayerStart(nil, nil, []card.Card{top})
+	s2, err := Apply(s, Move{Kind: MoveDraw})
+	if err != nil {
+		t.Fatalf("draw: %v", err)
+	}
+	if len(s2.Deck) != 0 {
+		t.Errorf("deck should be 0 after drawing last card, got %d", len(s2.Deck))
+	}
+	if len(s2.Players[P1].Hand) != 1 || s2.Players[P1].Hand[0] != top {
+		t.Errorf("expected P1 hand to be [%v], got %+v", top, s2.Players[P1].Hand)
+	}
+	if s2.Active != P2 {
+		t.Errorf("expected turn to end normally (active=P2), got %v", s2.Active)
+	}
+	if s2.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal, got %v", s2.Phase)
+	}
 }
 
 // fillHandNonTwo returns n cards that are not Twos (so they do not trigger
