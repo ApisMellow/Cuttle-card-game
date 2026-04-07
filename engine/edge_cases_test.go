@@ -25,6 +25,138 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("11_FiveWithDeckOneDrawsOne", caseB11)
 		t.Run("12_DrawLastDeckCard", caseB12)
 	})
+	t.Run("C_OpponentHandSize", func(t *testing.T) {
+		t.Run("13_FourOpponentHandZeroAutoResolves", caseC13)
+		t.Run("14_FourOpponentHandOneDiscardsOne", caseC14)
+		t.Run("15_FourOpponentHandTwoDiscardsBoth", caseC15)
+	})
+}
+
+// caseC13: Playing a 4 when the opponent has 0 cards in hand is legal and
+// auto-resolves with no discards. The engine skips PhaseAwaitingDiscard
+// entirely, scraps the 4, and ends P1's turn normally.
+//
+// JUDGMENT: RULES.md says "If their hand has fewer than 2 cards, they
+// discard whatever they have" — zero cards means zero discards. The
+// engine's Four handler short-circuits when opp hand is empty and falls
+// through to the normal end-of-one-off cleanup, which matches.
+func caseC13(t *testing.T) {
+	four := card.Card{Rank: card.Four, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{four}, nil, nil)
+	s.Players[P2].Hand = nil
+
+	moves := LegalMoves(s)
+	playFour, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MoveOneOff && m.Card == four
+	})
+	if !ok {
+		t.Fatal("playing a 4 with opponent hand=0 should be legal")
+	}
+	s2, err := Apply(s, playFour)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if s2.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal (auto-resume on empty opp hand), got %v", s2.Phase)
+	}
+	if len(s2.Players[P2].Hand) != 0 {
+		t.Errorf("opponent hand should remain 0, got %d", len(s2.Players[P2].Hand))
+	}
+	if len(s2.Scrap) != 1 || s2.Scrap[0] != four {
+		t.Errorf("expected scrap=[four], got %+v", s2.Scrap)
+	}
+	if s2.Active != P2 {
+		t.Errorf("expected turn to end (active=P2), got %v", s2.Active)
+	}
+	if s2.Pending != nil {
+		t.Errorf("expected Pending to be cleared, got %+v", s2.Pending)
+	}
+}
+
+// caseC14: Playing a 4 when the opponent has exactly 1 card. The engine
+// enters PhaseAwaitingDiscard with a single legal MoveDiscardPair whose
+// DiscardB sentinel is -1 (single-card discard). After applying it, the
+// opponent's hand is empty, scrap holds {4, discarded}, and phase returns
+// to PhaseNormal.
+func caseC14(t *testing.T) {
+	four := card.Card{Rank: card.Four, Suit: card.Spades}
+	lone := card.Card{Rank: card.Nine, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{four}, nil, nil)
+	s.Players[P2].Hand = []card.Card{lone}
+
+	playFour := Move{Kind: MoveOneOff, Card: four, HandIndex: 0}
+	s2, err := Apply(s, playFour)
+	if err != nil {
+		t.Fatalf("apply 4: %v", err)
+	}
+	if s2.Phase != PhaseAwaitingDiscard {
+		t.Fatalf("expected PhaseAwaitingDiscard, got %v", s2.Phase)
+	}
+	if s2.Active != P2 {
+		t.Fatalf("expected Active=P2 (discarder), got %v", s2.Active)
+	}
+	discardMoves := LegalMoves(s2)
+	if len(discardMoves) != 1 {
+		t.Fatalf("expected exactly 1 discard move, got %d: %+v", len(discardMoves), discardMoves)
+	}
+	dm := discardMoves[0]
+	if dm.Kind != MoveDiscardPair || dm.DiscardA != 0 || dm.DiscardB != -1 {
+		t.Errorf("expected single-card discard (0,-1), got %+v", dm)
+	}
+	s3, err := Apply(s2, dm)
+	if err != nil {
+		t.Fatalf("apply discard: %v", err)
+	}
+	if len(s3.Players[P2].Hand) != 0 {
+		t.Errorf("expected opp hand empty, got %+v", s3.Players[P2].Hand)
+	}
+	if len(s3.Scrap) != 2 {
+		t.Errorf("expected scrap size 2 (four+lone), got %d: %+v", len(s3.Scrap), s3.Scrap)
+	}
+	if s3.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal, got %v", s3.Phase)
+	}
+}
+
+// caseC15: Standard case — opponent has exactly 2 cards and the only legal
+// discard move is the pair (0,1), removing both. Scrap ends with {4, c0, c1}
+// and opponent hand is empty.
+func caseC15(t *testing.T) {
+	four := card.Card{Rank: card.Four, Suit: card.Spades}
+	c0 := card.Card{Rank: card.Nine, Suit: card.Hearts}
+	c1 := card.Card{Rank: card.Ten, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{four}, nil, nil)
+	s.Players[P2].Hand = []card.Card{c0, c1}
+
+	s2, err := Apply(s, Move{Kind: MoveOneOff, Card: four, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("apply 4: %v", err)
+	}
+	if s2.Phase != PhaseAwaitingDiscard {
+		t.Fatalf("expected PhaseAwaitingDiscard, got %v", s2.Phase)
+	}
+	discardMoves := LegalMoves(s2)
+	// C(2,2) = 1 pair.
+	if len(discardMoves) != 1 {
+		t.Fatalf("expected exactly 1 discard pair, got %d: %+v", len(discardMoves), discardMoves)
+	}
+	dm := discardMoves[0]
+	if dm.Kind != MoveDiscardPair || dm.DiscardA != 0 || dm.DiscardB != 1 {
+		t.Errorf("expected pair (0,1), got %+v", dm)
+	}
+	s3, err := Apply(s2, dm)
+	if err != nil {
+		t.Fatalf("apply discard: %v", err)
+	}
+	if len(s3.Players[P2].Hand) != 0 {
+		t.Errorf("expected opp hand empty, got %+v", s3.Players[P2].Hand)
+	}
+	if len(s3.Scrap) != 3 {
+		t.Errorf("expected scrap size 3, got %d: %+v", len(s3.Scrap), s3.Scrap)
+	}
+	if s3.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal, got %v", s3.Phase)
+	}
 }
 
 // caseB6: Deck empty but the active player has a playable card in hand
