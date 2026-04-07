@@ -19,6 +19,9 @@ func LegalMoves(s GameState) []Move {
 	if s.Phase == PhaseAwaitingCounter {
 		return legalCounterMoves(s)
 	}
+	if s.Phase == PhaseAwaitingDiscard {
+		return legalDiscardMoves(s)
+	}
 	if s.Phase != PhaseNormal {
 		// later phases handled in later tasks
 		return nil
@@ -32,7 +35,7 @@ func LegalMoves(s GameState) []Move {
 		if active.FrozenIDs[i] {
 			continue
 		}
-		if c.Rank == card.Ace || c.Rank == card.Six {
+		if c.Rank == card.Ace || c.Rank == card.Six || c.Rank == card.Four {
 			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
 		if c.Rank == card.Three {
@@ -157,7 +160,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank == card.Three {
@@ -206,6 +209,41 @@ func Apply(s GameState, m Move) (GameState, error) {
 		}
 		resolvePending(&out)
 		return out, nil
+	case MoveDiscardPair:
+		if s.Phase != PhaseAwaitingDiscard || out.Pending == nil {
+			return s, ErrIllegalMove
+		}
+		p := &out.Players[out.Active]
+		n := len(p.Hand)
+		if n == 0 {
+			return s, ErrIllegalMove
+		}
+		a, b := m.DiscardA, m.DiscardB
+		if n == 1 {
+			if a != 0 || b != -1 {
+				return s, ErrIllegalMove
+			}
+			out.Scrap = append(out.Scrap, p.Hand[0])
+			p.Hand = removeAt(p.Hand, 0)
+		} else {
+			if a < 0 || b < 0 || a >= n || b >= n || a == b {
+				return s, ErrIllegalMove
+			}
+			if a > b {
+				a, b = b, a
+			}
+			// Remove higher index first so lower index remains valid.
+			ca, cb := p.Hand[a], p.Hand[b]
+			p.Hand = removeAt(p.Hand, b)
+			p.Hand = removeAt(p.Hand, a)
+			out.Scrap = append(out.Scrap, ca, cb)
+		}
+		played := out.Pending.PlayedBy
+		out.Pending = nil
+		out.Phase = PhaseNormal
+		out.Active = played
+		endTurn(&out)
+		return out, nil
 	case MoveDecline:
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
 			return s, ErrIllegalMove
@@ -224,6 +262,28 @@ func hasLegalCounter(p PlayerState) bool {
 		}
 	}
 	return false
+}
+
+// legalDiscardMoves lists every unordered pair of hand indices for the
+// discarding (active) player. If hand has exactly 1 card, emits a single
+// move with DiscardA=0, DiscardB=-1. If hand is empty, returns nil (the
+// Four handler auto-resumes before entering this phase).
+func legalDiscardMoves(s GameState) []Move {
+	p := s.Players[s.Active]
+	n := len(p.Hand)
+	if n == 0 {
+		return nil
+	}
+	if n == 1 {
+		return []Move{{Kind: MoveDiscardPair, DiscardA: 0, DiscardB: -1}}
+	}
+	var moves []Move
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			moves = append(moves, Move{Kind: MoveDiscardPair, DiscardA: i, DiscardB: j})
+		}
+	}
+	return moves
 }
 
 // legalCounterMoves lists decline + one MoveCounter per legal 2.
@@ -289,6 +349,17 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 			}
 			pl.Points = nil
 		}
+	case card.Four:
+		// Opponent discards 2 cards (or 1 if hand has 1, or 0 auto-resume).
+		opp := played.Other()
+		if len(s.Players[opp].Hand) == 0 {
+			// Auto-resume: no discard needed, end turn normally.
+			break
+		}
+		s.Phase = PhaseAwaitingDiscard
+		s.Active = opp
+		s.Pending = &PendingOneOff{PlayedBy: played, Card: c}
+		return
 	case card.Six:
 		// Scrap all royals and glasses-8s on both sides. Permanents
 		// slice only holds Q/K/glasses-8 (Jacks live in point stacks),
