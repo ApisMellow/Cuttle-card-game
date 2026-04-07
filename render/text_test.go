@@ -1,0 +1,37 @@
+package render
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/ApisMellow/cuttle/card"
+	"github.com/ApisMellow/cuttle/engine"
+)
+
+func TestRender_BasicState(t *testing.T) {
+	s := engine.GameState{
+		Players: [2]engine.PlayerState{
+			{
+				Hand: []card.Card{
+					{Rank: card.King, Suit: card.Spades},
+					{Rank: card.Nine, Suit: card.Hearts},
+				},
+				Points:     []engine.PointEntry{{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}}},
+				Permanents: []card.Card{{Rank: card.Queen, Suit: card.Diamonds}},
+			},
+			{
+				Hand:   []card.Card{{Rank: card.Ace, Suit: card.Clubs}},
+				Points: []engine.PointEntry{{Card: card.Card{Rank: card.Ten, Suit: card.Diamonds}}},
+			},
+		},
+		Deck:   make([]card.Card, 30),
+		Active: engine.P1,
+		Phase:  engine.PhaseNormal,
+	}
+	out := Render(s)
+	for _, want := range []string{"PLAYER 1", "PLAYER 2", "K♠", "9♥", "Q♦", "7♥", "10♦", "P1 TO MOVE"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
