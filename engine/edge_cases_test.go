@@ -30,6 +30,156 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("14_FourOpponentHandOneDiscardsOne", caseC14)
 		t.Run("15_FourOpponentHandTwoDiscardsBoth", caseC15)
 	})
+	t.Run("D_EmptyPiles", func(t *testing.T) {
+		t.Run("16_ThreeEmptyScrapNotLegal", caseD16)
+		t.Run("17_TwoNoTargetsNotLegalInNormal", caseD17)
+		t.Run("18_SixNoPermanentsTriviallyResolves", caseD18)
+		t.Run("19_AceNoPointsTriviallyResolves", caseD19)
+	})
+}
+
+// caseD16: 3 with empty scrap is not legal as a one-off. LegalMoves iterates
+// s.Scrap to emit one MoveOneOff per scrap card; with len(Scrap)==0, no 3
+// one-off is emitted. (The 3 is one-off-only — no point/permanent fallback
+// for rank 3 beyond the generic A-10 point play, which remains legal.)
+//
+// JUDGMENT: RULES.md says the 3's effect is "Take any one card from the
+// scrap pile into your hand." With no scrap card to take, the effect has
+// no legal target; matches the engine's per-scrap-card emission.
+func caseD16(t *testing.T) {
+	three := card.Card{Rank: card.Three, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{three}, nil, nil)
+	if len(s.Scrap) != 0 {
+		t.Fatalf("setup: expected empty scrap, got %d", len(s.Scrap))
+	}
+	moves := LegalMoves(s)
+	for _, m := range moves {
+		if m.Kind == MoveOneOff && m.Card == three {
+			t.Errorf("MoveOneOff for Three should not be legal with empty scrap, got %+v", m)
+		}
+	}
+	// Sanity: the 3 is still playable as a point card (rank 3 ≤ 10).
+	if _, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MovePlayPoint && m.Card == three
+	}); !ok {
+		t.Error("expected MovePlayPoint for Three to still be legal")
+	}
+}
+
+// caseD17: A 2 in hand during PhaseNormal with no royals, glasses-8, or
+// jack-stacked point cards anywhere on the field has no legal target and
+// must not appear as a MoveOneOff. The 2's counter mode is only reachable
+// from PhaseAwaitingCounter, never from PhaseNormal.
+//
+// JUDGMENT: RULES.md describes the 2 as either a counter (opponent-turn
+// only, via PhaseAwaitingCounter) or "scrap a target royal or glasses-8".
+// With no such target on the field, neither mode is available from
+// PhaseNormal. The engine's LegalMoves for rank 2 only emits a move per
+// royal/glasses/jack-stack target, so an empty field yields zero 2-moves.
+func caseD17(t *testing.T) {
+	two := card.Card{Rank: card.Two, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{two}, nil, nil)
+	if s.Phase != PhaseNormal {
+		t.Fatalf("setup: expected PhaseNormal, got %v", s.Phase)
+	}
+	moves := LegalMoves(s)
+	for _, m := range moves {
+		if m.Kind == MoveOneOff && m.Card == two {
+			t.Errorf("MoveOneOff for Two should not be legal with no field targets, got %+v", m)
+		}
+	}
+}
+
+// caseD18: A 6 played when there are zero permanents and zero jack-stacks
+// on either side is legal and trivially resolves. The 6 is scrapped, no
+// other cards move, phase returns to PhaseNormal, and the turn ends.
+//
+// JUDGMENT: RULES.md describes the 6 as "Scrap all royals and glasses-8s
+// on both sides." With nothing to scrap, the effect is a no-op. RULES.md
+// does not forbid playing the 6 into an empty field; the engine lists
+// rank Six in LegalMoves unconditionally (line 41 of apply.go). Matches
+// the spirit of "bounded, not mandatory" one-off side effects (same
+// treatment as 5 with an empty deck — see caseB10).
+func caseD18(t *testing.T) {
+	six := card.Card{Rank: card.Six, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{six}, nil, nil)
+	moves := LegalMoves(s)
+	playSix, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MoveOneOff && m.Card == six
+	})
+	if !ok {
+		t.Fatal("playing a 6 with no permanents anywhere should be legal")
+	}
+	s2, err := Apply(s, playSix)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(s2.Players[P1].Permanents) != 0 || len(s2.Players[P2].Permanents) != 0 {
+		t.Errorf("expected no permanents anywhere, got P1=%+v P2=%+v",
+			s2.Players[P1].Permanents, s2.Players[P2].Permanents)
+	}
+	if len(s2.Players[P1].Points) != 0 || len(s2.Players[P2].Points) != 0 {
+		t.Errorf("expected no points anywhere, got P1=%+v P2=%+v",
+			s2.Players[P1].Points, s2.Players[P2].Points)
+	}
+	if len(s2.Scrap) != 1 || s2.Scrap[0] != six {
+		t.Errorf("expected scrap=[six], got %+v", s2.Scrap)
+	}
+	if len(s2.Players[P1].Hand) != 0 {
+		t.Errorf("expected P1 hand empty, got %+v", s2.Players[P1].Hand)
+	}
+	if s2.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal, got %v", s2.Phase)
+	}
+	if s2.Active != P2 {
+		t.Errorf("expected turn to end (active=P2), got %v", s2.Active)
+	}
+	if s2.Pending != nil {
+		t.Errorf("expected Pending nil, got %+v", s2.Pending)
+	}
+}
+
+// caseD19: An Ace played when there are zero point cards on either side is
+// legal and trivially resolves. The Ace is scrapped, no other cards move,
+// phase returns to PhaseNormal, and the turn ends.
+//
+// JUDGMENT: RULES.md describes the Ace as "Scrap all point cards on both
+// sides of the field." With nothing to scrap, the effect is a no-op. The
+// engine lists rank Ace in LegalMoves unconditionally. Same "bounded
+// side effect" principle as the 6-with-no-permanents case above.
+func caseD19(t *testing.T) {
+	ace := card.Card{Rank: card.Ace, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{ace}, nil, nil)
+	moves := LegalMoves(s)
+	playAce, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MoveOneOff && m.Card == ace
+	})
+	if !ok {
+		t.Fatal("playing an Ace with no points anywhere should be legal")
+	}
+	s2, err := Apply(s, playAce)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(s2.Players[P1].Points) != 0 || len(s2.Players[P2].Points) != 0 {
+		t.Errorf("expected no points anywhere, got P1=%+v P2=%+v",
+			s2.Players[P1].Points, s2.Players[P2].Points)
+	}
+	if len(s2.Scrap) != 1 || s2.Scrap[0] != ace {
+		t.Errorf("expected scrap=[ace], got %+v", s2.Scrap)
+	}
+	if len(s2.Players[P1].Hand) != 0 {
+		t.Errorf("expected P1 hand empty, got %+v", s2.Players[P1].Hand)
+	}
+	if s2.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal, got %v", s2.Phase)
+	}
+	if s2.Active != P2 {
+		t.Errorf("expected turn to end (active=P2), got %v", s2.Active)
+	}
+	if s2.Pending != nil {
+		t.Errorf("expected Pending nil, got %+v", s2.Pending)
+	}
 }
 
 // caseC13: Playing a 4 when the opponent has 0 cards in hand is legal and
