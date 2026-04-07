@@ -36,6 +36,12 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("18_SixNoPermanentsTriviallyResolves", caseD18)
 		t.Run("19_AceNoPointsTriviallyResolves", caseD19)
 	})
+	t.Run("E_CounterChain", func(t *testing.T) {
+		t.Run("20_ChainLenThreeCancels", caseE20)
+		t.Run("21_FrozenTwoNotInCounterLegalMoves", caseE21)
+		t.Run("22_ChainLenFiveCancels", caseE22)
+		t.Run("23_NoTwosAutoResolvesNoCounterPhase", caseE23)
+	})
 }
 
 // caseD16: 3 with empty scrap is not legal as a one-off. LegalMoves iterates
@@ -751,5 +757,284 @@ func caseA5(t *testing.T) {
 	p1Moves := LegalMoves(s2)
 	if containsKind(p1Moves, MoveDraw) {
 		t.Error("MoveDraw should not be legal when P1 hand is already at 8")
+	}
+}
+
+// caseE20: Counter-chain length 3 cancels the original one-off.
+// Setup: P1 (attacker) plays an Ace with one 2 in hand. P2 (defender) holds
+// two 2s. Sequence: A(P1) → 2(P2) → 2(P1) → 2(P2). After P2's third counter,
+// P1 has no more 2s, so the chain auto-resolves. Odd length (3) → the Ace is
+// cancelled (its board-wipe effect does not fire) and all four cards (Ace +
+// three 2s) end up in scrap.
+//
+// JUDGMENT: RULES.md says "Counter chains resolve last-in-first-out" and
+// that 2s can counter 2s. The cancel-parity rule (each counter flips the
+// previous resolution) means odd counter counts leave the original one-off
+// cancelled. Matches resolvePending()'s `cancelled := len(chain)%2 == 1`.
+func caseE20(t *testing.T) {
+	ace := card.Card{Rank: card.Ace, Suit: card.Spades}
+	p1two := card.Card{Rank: card.Two, Suit: card.Diamonds}
+	p2twoA := card.Card{Rank: card.Two, Suit: card.Hearts}
+	p2twoB := card.Card{Rank: card.Two, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{ace, p1two}, []card.Card{p2twoA, p2twoB}, nil)
+	// Give P1 a point on P2's side so the Ace has something to wipe (to make
+	// the "cancelled" claim observable).
+	s.Players[P2].Points = []PointEntry{
+		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P2},
+	}
+
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 plays ace: %v", err)
+	}
+	if s1.Phase != PhaseAwaitingCounter || s1.Active != P2 {
+		t.Fatalf("expected PhaseAwaitingCounter, P2 active; got phase=%d active=%v", s1.Phase, s1.Active)
+	}
+
+	// P2 counter #1 (chain len 1).
+	s2, err := Apply(s1, Move{Kind: MoveCounter, Card: p2twoA, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P2 counter 1: %v", err)
+	}
+	if s2.Phase != PhaseAwaitingCounter || s2.Active != P1 {
+		t.Fatalf("expected still awaiting counter with P1 active; got phase=%d active=%v", s2.Phase, s2.Active)
+	}
+
+	// P1 counter #2 (chain len 2).
+	s3, err := Apply(s2, Move{Kind: MoveCounter, Card: p1two, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 counter 2: %v", err)
+	}
+	if s3.Phase != PhaseAwaitingCounter || s3.Active != P2 {
+		t.Fatalf("expected still awaiting counter with P2 active; got phase=%d active=%v", s3.Phase, s3.Active)
+	}
+
+	// P2 counter #3 (chain len 3). P1 now has no 2s → auto-resolve.
+	s4, err := Apply(s3, Move{Kind: MoveCounter, Card: p2twoB, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P2 counter 3: %v", err)
+	}
+	if s4.Phase != PhaseNormal {
+		t.Fatalf("expected PhaseNormal after auto-resolve, got %d", s4.Phase)
+	}
+	if s4.Pending != nil {
+		t.Errorf("Pending should be nil after resolution, got %+v", s4.Pending)
+	}
+	// Odd chain length → Ace cancelled; P2's point remains.
+	if len(s4.Players[P2].Points) != 1 {
+		t.Errorf("Ace should have been cancelled; expected P2 to retain 1 point, got %+v", s4.Players[P2].Points)
+	}
+	// Scrap: ace + three 2s = 4.
+	if len(s4.Scrap) != 4 {
+		t.Errorf("expected 4 cards in scrap (ace + 3 twos), got %d: %+v", len(s4.Scrap), s4.Scrap)
+	}
+	// Both hands should be empty of these cards.
+	if len(s4.Players[P1].Hand) != 0 {
+		t.Errorf("P1 hand should be empty, got %+v", s4.Players[P1].Hand)
+	}
+	if len(s4.Players[P2].Hand) != 0 {
+		t.Errorf("P2 hand should be empty, got %+v", s4.Players[P2].Hand)
+	}
+	// Turn advances to P2 (next player after P1's cancelled action).
+	if s4.Active != P2 {
+		t.Errorf("expected turn to advance to P2, got %v", s4.Active)
+	}
+}
+
+// caseE21: A 2 that is frozen by an opponent's 9 cannot be played as a
+// counter. When PhaseAwaitingCounter is entered with one frozen 2 and one
+// unfrozen 2 in the defender's hand, LegalMoves must list a MoveCounter for
+// the unfrozen index only, never for the frozen index.
+//
+// JUDGMENT: RULES.md doesn't spell out frozen interaction with counters
+// directly, but the 9's freeze effect ("cannot be played on their next
+// turn") plainly applies to any play of that card, including as a counter.
+// legalCounterMoves() and the MoveCounter handler both honor FrozenIDs.
+func caseE21(t *testing.T) {
+	ace := card.Card{Rank: card.Ace, Suit: card.Spades}
+	frozenTwo := card.Card{Rank: card.Two, Suit: card.Hearts}
+	freeTwo := card.Card{Rank: card.Two, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{ace}, []card.Card{frozenTwo, freeTwo}, nil)
+	s.Players[P2].FrozenIDs = map[int]bool{0: true}
+	s.Players[P1].Points = []PointEntry{
+		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P1},
+	}
+
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 plays ace: %v", err)
+	}
+	// At least one unfrozen 2 exists, so we must enter PhaseAwaitingCounter.
+	if s1.Phase != PhaseAwaitingCounter {
+		t.Fatalf("expected PhaseAwaitingCounter (unfrozen 2 available), got phase=%d", s1.Phase)
+	}
+	if s1.Active != P2 {
+		t.Fatalf("expected P2 active, got %v", s1.Active)
+	}
+
+	moves := LegalMoves(s1)
+	// Must NOT list the frozen 2 (index 0).
+	for _, m := range moves {
+		if m.Kind == MoveCounter && m.HandIndex == 0 {
+			t.Errorf("frozen 2 at index 0 must not appear in counter legal moves, got %+v", m)
+		}
+	}
+	// Must list the unfrozen 2 (index 1).
+	if !hasCounterMove(moves, 1) {
+		t.Error("expected MoveCounter for unfrozen 2 at index 1")
+	}
+	// Decline is always available.
+	if !hasDecline(moves) {
+		t.Error("expected MoveDecline to be available")
+	}
+
+	// Engine should also reject an attempt to play the frozen 2 as counter.
+	if _, err := Apply(s1, Move{Kind: MoveCounter, Card: frozenTwo, HandIndex: 0}); err == nil {
+		t.Error("expected Apply to reject counter with frozen 2")
+	}
+}
+
+// caseE22: Counter chain length 5 — A → 2 → 2 → 2 → 2 → 2 — resolves with
+// odd parity, so the original Ace is cancelled. Rare but legal.
+//
+// JUDGMENT: Same parity rule as caseE20; this just stress-tests deeper
+// chains. After the fifth counter the alternating side has no more 2s and
+// the engine auto-resolves.
+func caseE22(t *testing.T) {
+	ace := card.Card{Rank: card.Ace, Suit: card.Spades}
+	// P1 has ace + 2 twos, P2 has 3 twos → sequence alternates starting with P2.
+	p1t1 := card.Card{Rank: card.Two, Suit: card.Diamonds}
+	p1t2 := card.Card{Rank: card.Two, Suit: card.Spades}
+	p2t1 := card.Card{Rank: card.Two, Suit: card.Hearts}
+	p2t2 := card.Card{Rank: card.Two, Suit: card.Clubs}
+	// We need a third 2 for P2 but only 4 suits exist. Reuse a non-conflicting
+	// shape — for the counter engine only Rank == Two matters; we'll use a
+	// fake duplicate suit. Apply only checks p.Hand[idx] == m.Card, and the
+	// two distinct PointEntry / hand slots with identical cards are fine as
+	// long as HandIndex disambiguates.
+	p2t3 := card.Card{Rank: card.Two, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{ace, p1t1, p1t2}, []card.Card{p2t1, p2t2, p2t3}, nil)
+	s.Players[P2].Points = []PointEntry{
+		{Card: card.Card{Rank: card.Seven, Suit: card.Diamonds}, Owner: P2},
+	}
+
+	// P1 plays ace.
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 ace: %v", err)
+	}
+	if s1.Phase != PhaseAwaitingCounter || s1.Active != P2 {
+		t.Fatalf("expected awaiting counter, P2 active; got phase=%d active=%v", s1.Phase, s1.Active)
+	}
+
+	// Chain: 5 counters. After each counter the remaining 2s shrink but hand
+	// indices for the NEXT player stay stable — we just always play index 0.
+	// 1: P2 plays a 2.
+	s2, err := Apply(s1, Move{Kind: MoveCounter, Card: s1.Players[P2].Hand[0], HandIndex: 0})
+	if err != nil {
+		t.Fatalf("counter 1: %v", err)
+	}
+	if s2.Phase != PhaseAwaitingCounter || s2.Active != P1 {
+		t.Fatalf("after c1: expected awaiting counter, P1 active; got phase=%d active=%v", s2.Phase, s2.Active)
+	}
+	// 2: P1 plays a 2.
+	s3, err := Apply(s2, Move{Kind: MoveCounter, Card: s2.Players[P1].Hand[0], HandIndex: 0})
+	if err != nil {
+		t.Fatalf("counter 2: %v", err)
+	}
+	if s3.Phase != PhaseAwaitingCounter || s3.Active != P2 {
+		t.Fatalf("after c2: expected awaiting counter, P2 active; got phase=%d active=%v", s3.Phase, s3.Active)
+	}
+	// 3: P2 plays a 2.
+	s4, err := Apply(s3, Move{Kind: MoveCounter, Card: s3.Players[P2].Hand[0], HandIndex: 0})
+	if err != nil {
+		t.Fatalf("counter 3: %v", err)
+	}
+	if s4.Phase != PhaseAwaitingCounter || s4.Active != P1 {
+		t.Fatalf("after c3: expected awaiting counter, P1 active; got phase=%d active=%v", s4.Phase, s4.Active)
+	}
+	// 4: P1 plays its last 2.
+	s5, err := Apply(s4, Move{Kind: MoveCounter, Card: s4.Players[P1].Hand[0], HandIndex: 0})
+	if err != nil {
+		t.Fatalf("counter 4: %v", err)
+	}
+	if s5.Phase != PhaseAwaitingCounter || s5.Active != P2 {
+		t.Fatalf("after c4: expected awaiting counter, P2 active; got phase=%d active=%v", s5.Phase, s5.Active)
+	}
+	// 5: P2 plays its last 2. P1 has no 2s → auto-resolve.
+	s6, err := Apply(s5, Move{Kind: MoveCounter, Card: s5.Players[P2].Hand[0], HandIndex: 0})
+	if err != nil {
+		t.Fatalf("counter 5: %v", err)
+	}
+	if s6.Phase != PhaseNormal {
+		t.Fatalf("expected PhaseNormal after 5th counter, got %d", s6.Phase)
+	}
+	if s6.Pending != nil {
+		t.Errorf("Pending should be nil, got %+v", s6.Pending)
+	}
+	// Odd chain length (5) → Ace cancelled → P2 keeps its point.
+	if len(s6.Players[P2].Points) != 1 {
+		t.Errorf("Ace should have been cancelled; expected P2 to retain 1 point, got %+v", s6.Players[P2].Points)
+	}
+	// Scrap: ace + 5 twos = 6 cards.
+	if len(s6.Scrap) != 6 {
+		t.Errorf("expected 6 cards in scrap (ace + 5 twos), got %d", len(s6.Scrap))
+	}
+	// Both hands fully emptied of their twos/ace.
+	if len(s6.Players[P1].Hand) != 0 || len(s6.Players[P2].Hand) != 0 {
+		t.Errorf("expected both hands empty, got P1=%+v P2=%+v", s6.Players[P1].Hand, s6.Players[P2].Hand)
+	}
+	if s6.Active != P2 {
+		t.Errorf("expected turn to advance to P2, got %v", s6.Active)
+	}
+}
+
+// caseE23: Defender has no 2s and no other way to interact: the engine must
+// skip PhaseAwaitingCounter entirely and auto-resolve the attacker's one-off
+// in place. Pending must never be set; Phase must remain PhaseNormal.
+//
+// JUDGMENT: RULES.md: the 2 is "the only card that may be played on the
+// opponent's turn." With no 2 in the defender's hand, there is no legal
+// counter, so the awaiting-counter phase is unreachable — matches the
+// `if hasLegalCounter(opp)` gate in apply.go.
+func caseE23(t *testing.T) {
+	ace := card.Card{Rank: card.Ace, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{ace},
+		[]card.Card{
+			{Rank: card.Five, Suit: card.Clubs},
+			{Rank: card.Seven, Suit: card.Diamonds},
+		}, nil)
+	s.Players[P1].Points = []PointEntry{
+		{Card: card.Card{Rank: card.Six, Suit: card.Hearts}, Owner: P1},
+	}
+	s.Players[P2].Points = []PointEntry{
+		{Card: card.Card{Rank: card.Four, Suit: card.Spades}, Owner: P2},
+	}
+
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 ace: %v", err)
+	}
+	// Must auto-resolve; never enters PhaseAwaitingCounter.
+	if s1.Phase != PhaseNormal {
+		t.Errorf("expected PhaseNormal (no counter phase), got phase=%d", s1.Phase)
+	}
+	if s1.Pending != nil {
+		t.Errorf("expected Pending nil (counter phase skipped), got %+v", s1.Pending)
+	}
+	// Ace effect applied: all points on both sides scrapped.
+	if len(s1.Players[P1].Points) != 0 || len(s1.Players[P2].Points) != 0 {
+		t.Errorf("expected all points scrapped, got P1=%+v P2=%+v", s1.Players[P1].Points, s1.Players[P2].Points)
+	}
+	// Scrap: ace + 6H + 4S = 3.
+	if len(s1.Scrap) != 3 {
+		t.Errorf("expected 3 cards in scrap (ace + 2 points), got %d", len(s1.Scrap))
+	}
+	// P2's hand untouched.
+	if len(s1.Players[P2].Hand) != 2 {
+		t.Errorf("P2 hand should still have 2 cards, got %+v", s1.Players[P2].Hand)
+	}
+	if s1.Active != P2 {
+		t.Errorf("expected turn to advance to P2, got %v", s1.Active)
 	}
 }
