@@ -15,12 +15,12 @@ var oneOffReference = []string{
 	"ONE-OFF EFFECTS",
 	"───────────────────────────",
 	"A  scrap ALL point cards",
-	"2  counter one-off, OR",
-	"   scrap a royal/glasses-8",
+	"2  scrap any permanent, OR",
+	"   block a one-off",
 	"3  take a card from scrap",
 	"4  opponent discards 2",
 	"5  draw 2 cards",
-	"6  scrap ALL royals + 8s",
+	"6  scrap ALL permanents",
 	"7  reveal top 2, play one",
 	"9  bounce a field card",
 	"   (frozen next turn)",
@@ -30,6 +30,11 @@ var oneOffReference = []string{
 	"J  steal an opp point",
 	"Q  protect your other cards",
 	"K  lower win threshold",
+	"───────────────────────────",
+	"WIN: 0K=21 1K=14 2K=10 3K=7 4K=5",
+	"───────────────────────────",
+	"SUIT ORDER (low → high)",
+	"♣ < ♦ < ♥ < ♠",
 }
 
 func Render(s engine.GameState) string {

@@ -11,7 +11,7 @@ Two-player card game played with a standard 52-card deck.
 ## Win Condition
 - A player wins when they have **21 or more points** on their side of the field at the end of their own action.
 - Wins are only checked on your own turn. The 2 (counter) is the only card playable on the opponent's turn, and a counter cannot add points, so an off-turn win is impossible.
-- **Kings** lower your own threshold: 1 King → 14, 2 Kings → 10, 3 Kings → 5, 4 Kings → 0.
+- **Kings** lower your own threshold: 1 King → 14, 2 Kings → 10, 3 Kings → 7, 4 Kings → 5.
 
 ## Hand Limit
 - Maximum hand size: **8 cards**. You cannot draw past it.
@@ -50,7 +50,7 @@ On your turn, take exactly one action. If the deck is empty and you cannot other
 | **8 (glasses)** | While in play, your opponent's hand is visible to you. Any 8 may be played this way. |
 | **J** | Played on top of an opponent's point card to **steal** it onto your side (it now counts for you). If the Jack is later scrapped or stolen back, the underlying point card returns to its original owner. A Jack may target a point card already under another Jack (chain-steal). |
 | **Q** | Your **other** cards cannot be targeted by your opponent's cards. The Queen does not protect itself, does not block board-wipes (Ace, Six), and does not block scuttling. **A Queen does block Jacks**: a protected point card cannot be stolen. |
-| **K** | Lowers your win threshold. Stacks: 1K=14, 2K=10, 3K=5, 4K=0. |
+| **K** | Lowers your win threshold. Stacks: 1K=14, 2K=10, 3K=7, 4K=5. |
 
 ## Notes / Clarifications
 - **2 vs. 2**: 2s can counter 2s. Counter chains resolve last-in-first-out.

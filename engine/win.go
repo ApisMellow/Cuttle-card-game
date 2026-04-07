@@ -11,9 +11,9 @@ func Threshold(kings int) int {
 	case kings == 2:
 		return 10
 	case kings == 3:
-		return 5
+		return 7
 	default:
-		return 0
+		return 5
 	}
 }
 

@@ -14,8 +14,8 @@ func TestThreshold_NoKings(t *testing.T) {
 
 func TestThreshold_OneKing(t *testing.T)    { mustThreshold(t, 1, 14) }
 func TestThreshold_TwoKings(t *testing.T)   { mustThreshold(t, 2, 10) }
-func TestThreshold_ThreeKings(t *testing.T) { mustThreshold(t, 3, 5) }
-func TestThreshold_FourKings(t *testing.T)  { mustThreshold(t, 4, 0) }
+func TestThreshold_ThreeKings(t *testing.T) { mustThreshold(t, 3, 7) }
+func TestThreshold_FourKings(t *testing.T)  { mustThreshold(t, 4, 5) }
 
 func mustThreshold(t *testing.T, kings, want int) {
 	t.Helper()
