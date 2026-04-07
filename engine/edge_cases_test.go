@@ -63,6 +63,11 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("33e_FrozenCardCannotCounter", caseH33e)
 		t.Run("34_FreezeClearsAtStartOfAffectedOwnNextTurn", caseH34)
 	})
+	t.Run("I_Stalemate", func(t *testing.T) {
+		t.Run("35_ThreeConsecutivePassesEndGame", caseI35)
+		t.Run("36_PassNotLegalWhenDrawAvailable", caseI36)
+		t.Run("35b_NonPassMoveResetsPassCounter", caseI35b)
+	})
 }
 
 // caseD16: 3 with empty scrap is not legal as a one-off. LegalMoves iterates
@@ -1825,5 +1830,143 @@ func caseH34(t *testing.T) {
 	}
 	if s3.Players[P2].FrozenIDs[idx] {
 		t.Errorf("freeze should have cleared at start of P2's own next turn, got %+v", s3.Players[P2].FrozenIDs)
+	}
+}
+
+// caseI35: Three consecutive MovePass actions stalemate the game.
+// RULES.md: "Three consecutive passes = stalemate." With an empty deck and
+// empty hands on both sides, neither player has any legal action besides
+// MovePass. After the third pass the game must enter PhaseGameOver with
+// Winner == nil (stalemate, no victor).
+//
+// JUDGMENT: We construct the minimal stalemate setup — empty hands, empty
+// deck, no points, no permanents — so LegalMoves on each turn yields
+// exactly [MovePass]. Verifying nil Winner is the unambiguous "no winner"
+// signal per state.go (Winner is *PlayerID; nil means unset).
+func caseI35(t *testing.T) {
+	s := twoPlayerStart(nil, nil, nil)
+	// Sanity: only Pass is legal.
+	moves := LegalMoves(s)
+	if len(moves) != 1 || moves[0].Kind != MovePass {
+		t.Fatalf("expected only MovePass legal, got %+v", moves)
+	}
+
+	// Pass 1 (P1).
+	s1, err := Apply(s, Move{Kind: MovePass})
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	if s1.Phase == PhaseGameOver {
+		t.Fatalf("game ended after 1 pass")
+	}
+	if s1.PassesInARow != 1 {
+		t.Errorf("PassesInARow=%d after 1 pass, want 1", s1.PassesInARow)
+	}
+	if s1.Active != P2 {
+		t.Errorf("expected Active=P2 after P1 pass, got %v", s1.Active)
+	}
+
+	// Pass 2 (P2).
+	s2, err := Apply(s1, Move{Kind: MovePass})
+	if err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if s2.Phase == PhaseGameOver {
+		t.Fatalf("game ended after 2 passes")
+	}
+	if s2.PassesInARow != 2 {
+		t.Errorf("PassesInARow=%d after 2 passes, want 2", s2.PassesInARow)
+	}
+
+	// Pass 3 (P1) — stalemate.
+	s3, err := Apply(s2, Move{Kind: MovePass})
+	if err != nil {
+		t.Fatalf("pass 3: %v", err)
+	}
+	if s3.Phase != PhaseGameOver {
+		t.Fatalf("expected PhaseGameOver after 3 passes, got %v", s3.Phase)
+	}
+	if s3.Winner != nil {
+		t.Errorf("expected Winner==nil for stalemate, got %v", *s3.Winner)
+	}
+	// LegalMoves on a finished game must be empty.
+	if got := LegalMoves(s3); got != nil {
+		t.Errorf("expected no legal moves after game over, got %+v", got)
+	}
+	// Apply on a finished game must error.
+	if _, err := Apply(s3, Move{Kind: MovePass}); err != ErrIllegalMove {
+		t.Errorf("expected ErrIllegalMove applying to finished game, got %v", err)
+	}
+}
+
+// caseI36: MovePass is not legal when any other move is available. The
+// engine emits MovePass only as a fallback when LegalMoves would otherwise
+// be empty (apply.go LegalMoves: `if len(moves) == 0`). With a non-empty
+// deck and a non-full hand, MoveDraw is always legal, so MovePass must NOT
+// appear, and Apply must reject a Pass attempt.
+//
+// JUDGMENT: RULES.md only describes passing in the deck-empty/cannot-act
+// situation. The engine enforces this strictly: Pass is never an
+// alternative to a real action. Apply currently has no explicit guard
+// against an out-of-band MovePass (it just runs the pass logic). That
+// would let a caller bypass the legality rule and march toward stalemate
+// even when actions are available — observable as "MovePass succeeds when
+// MoveDraw is also legal." We assert it should error; if the engine
+// doesn't, that's a bug found by the sweep.
+func caseI36(t *testing.T) {
+	deck := []card.Card{{Rank: card.Ace, Suit: card.Spades}}
+	s := twoPlayerStart(nil, nil, deck)
+
+	moves := LegalMoves(s)
+	sawDraw := false
+	for _, m := range moves {
+		if m.Kind == MovePass {
+			t.Errorf("MovePass must not be legal when other moves exist; moves=%+v", moves)
+		}
+		if m.Kind == MoveDraw {
+			sawDraw = true
+		}
+	}
+	if !sawDraw {
+		t.Fatalf("expected MoveDraw to be legal in setup, got %+v", moves)
+	}
+
+	if _, err := Apply(s, Move{Kind: MovePass}); err != ErrIllegalMove {
+		t.Errorf("expected ErrIllegalMove for MovePass when other moves exist, got %v", err)
+	}
+}
+
+// caseI35b: A non-pass action resets PassesInARow to 0. RULES.md frames
+// stalemate as "three CONSECUTIVE passes" — any intervening action must
+// reset the counter. apply.go sets PassesInARow=0 in every non-pass branch
+// (Draw, PlayPoint, PlayPermanent, Scuttle, OneOff). We exercise the
+// reset on a Draw and on a PlayPoint, asserting the counter goes to 0
+// even when it was previously at 2 (one shy of stalemate).
+func caseI35b(t *testing.T) {
+	// Sub-case A: Draw resets the counter.
+	deck := []card.Card{{Rank: card.Ace, Suit: card.Spades}}
+	s := twoPlayerStart(nil, nil, deck)
+	s.PassesInARow = 2
+	s1, err := Apply(s, Move{Kind: MoveDraw})
+	if err != nil {
+		t.Fatalf("draw: %v", err)
+	}
+	if s1.PassesInARow != 0 {
+		t.Errorf("Draw should reset PassesInARow to 0, got %d", s1.PassesInARow)
+	}
+	if s1.Phase == PhaseGameOver {
+		t.Fatalf("game must not be over after a non-pass action")
+	}
+
+	// Sub-case B: PlayPoint resets the counter.
+	ace := card.Card{Rank: card.Ace, Suit: card.Hearts}
+	s2 := twoPlayerStart([]card.Card{ace}, nil, nil)
+	s2.PassesInARow = 2
+	s3, err := Apply(s2, Move{Kind: MovePlayPoint, Card: ace, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("play point: %v", err)
+	}
+	if s3.PassesInARow != 0 {
+		t.Errorf("PlayPoint should reset PassesInARow to 0, got %d", s3.PassesInARow)
 	}
 }
