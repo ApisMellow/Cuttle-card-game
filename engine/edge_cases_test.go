@@ -42,6 +42,13 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("22_ChainLenFiveCancels", caseE22)
 		t.Run("23_NoTwosAutoResolvesNoCounterPhase", caseE23)
 	})
+	t.Run("F_JackQueen", func(t *testing.T) {
+		t.Run("24_JackChainStealLen3", caseF24)
+		t.Run("25_ScrapTopJackOfTwoJackStack", caseF25)
+		t.Run("26_SixWipesJackStackPointReturnsToOwner", caseF26)
+		t.Run("27_NineBouncesPointUnderJackStack", caseF27)
+		t.Run("28_ScrappedQueenUnblocksJackTargets", caseF28)
+	})
 }
 
 // caseD16: 3 with empty scrap is not legal as a one-off. LegalMoves iterates
@@ -1036,5 +1043,351 @@ func caseE23(t *testing.T) {
 	}
 	if s1.Active != P2 {
 		t.Errorf("expected turn to advance to P2, got %v", s1.Active)
+	}
+}
+
+// caseF24: Jack-on-Jack-on-Jack chain steal. P1 plays J1 onto P2's 7, stealing
+// it. P2 plays J2 onto the same PointEntry, re-stealing. P1 plays J3, stealing
+// again. The resulting JackStack has length 3 in the expected LIFO order
+// (J1,J2,J3) with matching JackOwners (P1,P2,P1). The PointEntry lives on P1's
+// Points slice; original Owner is P2; Controller() == P1.
+//
+// JUDGMENT: RULES.md explicitly permits chain-stealing: "A Jack may target a
+// point card already under another Jack." The apply.go Jack branch appends to
+// pe.JackStack / pe.JackOwners without depth restriction. Queen protection is
+// only evaluated against the current controlling side, so each successive
+// steal needs the defender (current controller) to lack a Queen — which our
+// scenario guarantees since neither side ever plays one.
+func caseF24(t *testing.T) {
+	j1 := card.Card{Rank: card.Jack, Suit: card.Spades}
+	j2 := card.Card{Rank: card.Jack, Suit: card.Hearts}
+	j3 := card.Card{Rank: card.Jack, Suit: card.Diamonds}
+	seven := card.Card{Rank: card.Seven, Suit: card.Clubs}
+
+	// P1 starts with j1 and j3 (plays one each of its two turns). P2 holds j2.
+	s := twoPlayerStart([]card.Card{j1, j3}, []card.Card{j2}, nil)
+	s.Players[P2].Points = []PointEntry{{Card: seven, Owner: P2}}
+
+	// P1 steals P2's 7 with J1.
+	tgt1 := Target{Owner: P2, Zone: ZonePoints, Index: 0}
+	s1, err := Apply(s, Move{Kind: MovePlayPermanent, Card: j1, HandIndex: 0, JackTarget: &tgt1})
+	if err != nil {
+		t.Fatalf("P1 J1 steal: %v", err)
+	}
+	if len(s1.Players[P1].Points) != 1 || len(s1.Players[P2].Points) != 0 {
+		t.Fatalf("after J1: point should sit on P1, got P1=%+v P2=%+v", s1.Players[P1].Points, s1.Players[P2].Points)
+	}
+
+	// P2 re-steals with J2 (active player is now P2).
+	tgt2 := Target{Owner: P1, Zone: ZonePoints, Index: 0}
+	s2, err := Apply(s1, Move{Kind: MovePlayPermanent, Card: j2, HandIndex: 0, JackTarget: &tgt2})
+	if err != nil {
+		t.Fatalf("P2 J2 steal: %v", err)
+	}
+	if len(s2.Players[P2].Points) != 1 || len(s2.Players[P1].Points) != 0 {
+		t.Fatalf("after J2: point should sit on P2, got P1=%+v P2=%+v", s2.Players[P1].Points, s2.Players[P2].Points)
+	}
+
+	// P1 steals again with J3.
+	tgt3 := Target{Owner: P2, Zone: ZonePoints, Index: 0}
+	s3, err := Apply(s2, Move{Kind: MovePlayPermanent, Card: j3, HandIndex: 0, JackTarget: &tgt3})
+	if err != nil {
+		t.Fatalf("P1 J3 steal: %v", err)
+	}
+	if len(s3.Players[P1].Points) != 1 {
+		t.Fatalf("after J3: point should sit on P1, got %+v", s3.Players[P1].Points)
+	}
+	pe := s3.Players[P1].Points[0]
+	if pe.Card != seven {
+		t.Errorf("underlying card wrong: %+v", pe.Card)
+	}
+	if pe.Owner != P2 {
+		t.Errorf("Owner should remain original P2, got %v", pe.Owner)
+	}
+	if len(pe.JackStack) != 3 {
+		t.Fatalf("expected JackStack length 3, got %d (%+v)", len(pe.JackStack), pe.JackStack)
+	}
+	if pe.JackStack[0] != j1 || pe.JackStack[1] != j2 || pe.JackStack[2] != j3 {
+		t.Errorf("JackStack order wrong: %+v", pe.JackStack)
+	}
+	if len(pe.JackOwners) != 3 || pe.JackOwners[0] != P1 || pe.JackOwners[1] != P2 || pe.JackOwners[2] != P1 {
+		t.Errorf("JackOwners wrong: %+v", pe.JackOwners)
+	}
+	if pe.Controller() != P1 {
+		t.Errorf("controller should be P1 (top jack's owner), got %v", pe.Controller())
+	}
+}
+
+// caseF25: Scrapping the top Jack from a 2-Jack stack (via 2-as-scrap). The
+// top Jack goes to the scrap pile; the remaining Jack still controls the
+// underlying point. The PointEntry stays on the side of whoever owned the
+// *new* top Jack (here: the Jack that remains), because only an empty
+// JackStack triggers a transplant back to Owner.
+//
+// JUDGMENT: The 2-as-scrap branch in apply.go pops exactly one Jack (the top
+// JackStack entry), scraps it, and only re-transplants the entry to its
+// original Owner if the stack empties. With a 2-jack stack, after popping one
+// the stack still has one Jack; the entry stays put on the current side.
+// Setup: P2 owns a 7 that was stolen first by P2's own side via J_bottom?
+// No — P2 is owner, so the bottom Jack must be P1's (stole from P2). Then P2
+// re-stole with J_top. Entry currently sits on P2's Points (since top jack
+// owner = P2). P1 plays 2 targeting it, pops J_top. Remaining J_bottom owned
+// by P1 ⇒ entry should transplant? No: the code does NOT re-evaluate
+// controller/side on pop, it only transplants when the stack becomes empty.
+// This means after the pop the entry still sits in P2's Points slice even
+// though its new controller is P1. Verify the engine's actual behavior and
+// document the result as a finding if mismatched.
+func caseF25(t *testing.T) {
+	two := card.Card{Rank: card.Two, Suit: card.Spades}
+	jBot := card.Card{Rank: card.Jack, Suit: card.Clubs}  // played first, by P1 (stole from P2)
+	jTop := card.Card{Rank: card.Jack, Suit: card.Hearts} // played second, by P2 (re-stole)
+	seven := card.Card{Rank: card.Seven, Suit: card.Diamonds}
+
+	// Current state: entry sits on P2's Points (top jack owner = P2).
+	// P1 is active and holds a 2 to scrap the top Jack.
+	s := twoPlayerStart([]card.Card{two}, nil, nil)
+	s.Players[P2].Points = []PointEntry{
+		{Card: seven, Owner: P2, JackStack: []card.Card{jBot, jTop}, JackOwners: []PlayerID{P1, P2}},
+	}
+
+	tgt := Target{Owner: P2, Zone: ZonePoints, Index: 0}
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: two, HandIndex: 0, Target: &tgt})
+	if err != nil {
+		t.Fatalf("P1 two-as-scrap: %v", err)
+	}
+	// Entry should still exist exactly once on the field.
+	total := len(s1.Players[P1].Points) + len(s1.Players[P2].Points)
+	if total != 1 {
+		t.Fatalf("expected exactly 1 PointEntry on the field, got %d (P1=%+v P2=%+v)", total, s1.Players[P1].Points, s1.Players[P2].Points)
+	}
+	// Find the entry and verify.
+	var pe PointEntry
+	if len(s1.Players[P2].Points) == 1 {
+		pe = s1.Players[P2].Points[0]
+	} else {
+		pe = s1.Players[P1].Points[0]
+	}
+	if pe.Card != seven {
+		t.Errorf("underlying point should still be the 7, got %+v", pe.Card)
+	}
+	if pe.Owner != P2 {
+		t.Errorf("Owner should remain P2, got %v", pe.Owner)
+	}
+	if len(pe.JackStack) != 1 || pe.JackStack[0] != jBot {
+		t.Errorf("remaining JackStack should be [jBot], got %+v", pe.JackStack)
+	}
+	if len(pe.JackOwners) != 1 || pe.JackOwners[0] != P1 {
+		t.Errorf("remaining JackOwners should be [P1], got %+v", pe.JackOwners)
+	}
+	// The remaining Jack's owner (P1) is the new controller of the point.
+	if pe.Controller() != P1 {
+		t.Errorf("after top-jack scrap, controller should be P1 (remaining jack's owner), got %v", pe.Controller())
+	}
+	// Top Jack must be in the scrap pile; bottom Jack must not be.
+	foundTop, foundBot := false, false
+	for _, c := range s1.Scrap {
+		if c == jTop {
+			foundTop = true
+		}
+		if c == jBot {
+			foundBot = true
+		}
+	}
+	if !foundTop {
+		t.Errorf("top Jack should be in scrap, scrap=%+v", s1.Scrap)
+	}
+	if foundBot {
+		t.Errorf("bottom Jack should NOT be in scrap, scrap=%+v", s1.Scrap)
+	}
+}
+
+// caseF26: Six wipes a Jack stack. Given a point under a 2-jack stack on the
+// attacker's side, playing a 6 must scrap every Jack in the stack and return
+// the underlying point card to its original Owner's Points slice.
+//
+// JUDGMENT: RULES.md says 6 "scrap[s] all royals and glasses-8s on both
+// sides." The engine's Six handler (apply.go) additionally strips Jacks from
+// every point stack and transplants each stripped entry back to its original
+// Owner — which matches the invariant at the top of state.go ("A 6 that scraps
+// a stack's jacks returns the underlying point card to `Owner`'s Points
+// slice.").
+func caseF26(t *testing.T) {
+	six := card.Card{Rank: card.Six, Suit: card.Spades}
+	j1 := card.Card{Rank: card.Jack, Suit: card.Clubs}
+	j2 := card.Card{Rank: card.Jack, Suit: card.Hearts}
+	seven := card.Card{Rank: card.Seven, Suit: card.Diamonds}
+
+	// Entry sits on P1's Points (top jack owner = P1), original Owner = P2.
+	s := twoPlayerStart([]card.Card{six}, nil, nil)
+	s.Players[P1].Points = []PointEntry{
+		{Card: seven, Owner: P2, JackStack: []card.Card{j1, j2}, JackOwners: []PlayerID{P2, P1}},
+	}
+
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: six, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("P1 play six: %v", err)
+	}
+	// P1 should no longer hold the point (Jacks wiped → transplant to Owner).
+	if len(s1.Players[P1].Points) != 0 {
+		t.Errorf("P1 should hold no points after six, got %+v", s1.Players[P1].Points)
+	}
+	if len(s1.Players[P2].Points) != 1 {
+		t.Fatalf("P2 (original owner) should re-receive the point, got %+v", s1.Players[P2].Points)
+	}
+	pe := s1.Players[P2].Points[0]
+	if pe.Card != seven {
+		t.Errorf("returned card wrong: %+v", pe.Card)
+	}
+	if len(pe.JackStack) != 0 || len(pe.JackOwners) != 0 {
+		t.Errorf("JackStack/Owners should be cleared, got stack=%+v owners=%+v", pe.JackStack, pe.JackOwners)
+	}
+	// Both jacks plus the 6 must be in scrap.
+	foundJ1, foundJ2, foundSix := false, false, false
+	for _, c := range s1.Scrap {
+		if c == j1 {
+			foundJ1 = true
+		}
+		if c == j2 {
+			foundJ2 = true
+		}
+		if c == six {
+			foundSix = true
+		}
+	}
+	if !foundJ1 || !foundJ2 || !foundSix {
+		t.Errorf("scrap missing cards: j1=%v j2=%v six=%v scrap=%+v", foundJ1, foundJ2, foundSix, s1.Scrap)
+	}
+}
+
+// caseF27: Nine bouncing a point card that sits under a Jack stack. Per the
+// invariant in state.go: "A 9 that bounces a point returns the point card to
+// `Owner`'s hand (jack(s) scrapped)." All Jacks on the stack go to scrap; the
+// underlying card goes back to the original Owner's hand and is frozen for
+// their next turn.
+//
+// JUDGMENT: RULES.md's 9 entry ("Return an opponent's field card ... to their
+// hand. That card cannot be played on their next turn.") is silent on the
+// Jack-stack case. The engine (apply.go Nine branch) explicitly handles it:
+// if the target PE has a JackStack, the jacks go to scrap and pe.Card returns
+// to pe.Owner's hand (frozen). Tests the documented invariant directly.
+func caseF27(t *testing.T) {
+	nine := card.Card{Rank: card.Nine, Suit: card.Hearts}
+	j1 := card.Card{Rank: card.Jack, Suit: card.Clubs}
+	j2 := card.Card{Rank: card.Jack, Suit: card.Diamonds}
+	seven := card.Card{Rank: card.Seven, Suit: card.Spades}
+
+	// Entry sits on P2's Points; original Owner = P1 (stolen earlier).
+	// P1 is active and plays a 9 targeting it — a valid move since the entry
+	// is opponent-controlled from P1's perspective.
+	s := twoPlayerStart([]card.Card{nine}, nil, nil)
+	s.Players[P2].Points = []PointEntry{
+		{Card: seven, Owner: P1, JackStack: []card.Card{j1, j2}, JackOwners: []PlayerID{P2, P2}},
+	}
+
+	tgt := Target{Owner: P2, Zone: ZonePoints, Index: 0}
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: nine, HandIndex: 0, Target: &tgt})
+	if err != nil {
+		t.Fatalf("P1 play nine: %v", err)
+	}
+	// Point should no longer be on either side of the field.
+	if len(s1.Players[P1].Points) != 0 || len(s1.Players[P2].Points) != 0 {
+		t.Errorf("no points should remain on field, got P1=%+v P2=%+v", s1.Players[P1].Points, s1.Players[P2].Points)
+	}
+	// The 7 should be in P1's hand (original owner), frozen.
+	foundSeven := -1
+	for i, c := range s1.Players[P1].Hand {
+		if c == seven {
+			foundSeven = i
+			break
+		}
+	}
+	if foundSeven < 0 {
+		t.Fatalf("seven should have returned to P1's hand, got %+v", s1.Players[P1].Hand)
+	}
+	if s1.Players[P1].FrozenIDs == nil || !s1.Players[P1].FrozenIDs[foundSeven] {
+		t.Errorf("returned card should be frozen on P1, got FrozenIDs=%+v", s1.Players[P1].FrozenIDs)
+	}
+	// Both jacks and the 9 must be in scrap.
+	foundJ1, foundJ2, foundNine := false, false, false
+	for _, c := range s1.Scrap {
+		if c == j1 {
+			foundJ1 = true
+		}
+		if c == j2 {
+			foundJ2 = true
+		}
+		if c == nine {
+			foundNine = true
+		}
+	}
+	if !foundJ1 || !foundJ2 || !foundNine {
+		t.Errorf("scrap missing cards: j1=%v j2=%v nine=%v scrap=%+v", foundJ1, foundJ2, foundNine, s1.Scrap)
+	}
+	// Turn should have advanced to P2.
+	if s1.Active != P2 {
+		t.Errorf("expected turn to advance to P2, got %v", s1.Active)
+	}
+}
+
+// caseF28: A Queen protecting points is itself scrapped (via a 2-as-scrap).
+// Once the Queen is gone, the previously-protected points become valid
+// Jack-steal targets in opponent's LegalMoves. Scenario: P1 holds {2, J},
+// P2 has a Queen protecting a single point card. P1 plays the 2 to scrap the
+// Queen; P2 has no 2s so no counter phase; turn advances to P2, which passes;
+// back to P1 whose LegalMoves should now include a MovePlayPermanent Jack
+// targeting P2's point.
+//
+// JUDGMENT: RULES.md: "A Queen does block Jacks: a protected point card
+// cannot be stolen." The protection is a live check in LegalMoves (apply.go
+// Jack branch gated on !oppHasQueen). After the Queen is scrapped the gate
+// clears, matching the rules' "while in play" semantics.
+func caseF28(t *testing.T) {
+	two := card.Card{Rank: card.Two, Suit: card.Spades}
+	jack := card.Card{Rank: card.Jack, Suit: card.Clubs}
+	queen := card.Card{Rank: card.Queen, Suit: card.Hearts}
+	seven := card.Card{Rank: card.Seven, Suit: card.Diamonds}
+
+	s := twoPlayerStart([]card.Card{two, jack}, nil, nil)
+	// P2 has the Queen and a point under its protection. P2 holds no 2s, so
+	// P1's 2-as-scrap cannot be countered.
+	s.Players[P2].Hand = []card.Card{{Rank: card.Five, Suit: card.Clubs}}
+	s.Players[P2].Permanents = []card.Card{queen}
+	s.Players[P2].Points = []PointEntry{{Card: seven, Owner: P2}}
+
+	// Sanity: with the Queen on the field, no Jack play against P2's point.
+	moves0 := LegalMoves(s)
+	if hasJackPlay(moves0, P2, 0) {
+		t.Fatal("setup sanity: Queen should be blocking Jack steal pre-scrap")
+	}
+
+	// P1 plays 2 targeting P2's Queen.
+	tgtQ := Target{Owner: P2, Zone: ZonePermanents, Index: 0}
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: two, HandIndex: 0, Target: &tgtQ})
+	if err != nil {
+		t.Fatalf("P1 two-scraps-queen: %v", err)
+	}
+	if s1.Phase != PhaseNormal {
+		t.Fatalf("expected PhaseNormal (no counter phase, P2 has no 2), got phase=%d", s1.Phase)
+	}
+	if len(s1.Players[P2].Permanents) != 0 {
+		t.Errorf("Queen should be scrapped, P2 permanents=%+v", s1.Players[P2].Permanents)
+	}
+	// Turn should have advanced to P2.
+	if s1.Active != P2 {
+		t.Fatalf("expected P2 to be active, got %v", s1.Active)
+	}
+	// P2 passes (only has a 5 in hand and an empty deck → must pass or play
+	// the 5; explicitly pass to hand control back to P1).
+	s2, err := Apply(s1, Move{Kind: MovePass})
+	if err != nil {
+		t.Fatalf("P2 pass: %v", err)
+	}
+	if s2.Active != P1 {
+		t.Fatalf("expected P1 active after P2 pass, got %v", s2.Active)
+	}
+	// P1's LegalMoves should now include a Jack play targeting P2's point.
+	moves := LegalMoves(s2)
+	if !hasJackPlay(moves, P2, 0) {
+		t.Errorf("after Queen is scrapped, Jack steal should be legal; moves=%+v", moves)
 	}
 }
