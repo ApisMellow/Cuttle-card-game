@@ -38,6 +38,17 @@ func LegalMoves(s GameState) []Move {
 		if c.Rank == card.Ace || c.Rank == card.Six || c.Rank == card.Four || c.Rank == card.Five {
 			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
+		if c.Rank == card.Nine {
+			opp := s.Active.Other()
+			for j := range s.Players[opp].Points {
+				tgt := Target{Owner: opp, Zone: ZonePoints, Index: j}
+				moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i, Target: &tgt})
+			}
+			for j := range s.Players[opp].Permanents {
+				tgt := Target{Owner: opp, Zone: ZonePermanents, Index: j}
+				moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i, Target: &tgt})
+			}
+		}
 		if c.Rank == card.Three {
 			// Three: take any one card from scrap into hand. One move per
 			// scrap card. No legal play if scrap is empty. Playing the 3
@@ -160,11 +171,29 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five && m.Card.Rank != card.Nine {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank == card.Three {
 			if m.ScrapIndex < 0 || m.ScrapIndex >= len(out.Scrap) {
+				return s, ErrIllegalMove
+			}
+		}
+		if m.Card.Rank == card.Nine {
+			if m.Target == nil {
+				return s, ErrIllegalMove
+			}
+			tp := &out.Players[m.Target.Owner]
+			switch m.Target.Zone {
+			case ZonePoints:
+				if m.Target.Index < 0 || m.Target.Index >= len(tp.Points) {
+					return s, ErrIllegalMove
+				}
+			case ZonePermanents:
+				if m.Target.Index < 0 || m.Target.Index >= len(tp.Permanents) {
+					return s, ErrIllegalMove
+				}
+			default:
 				return s, ErrIllegalMove
 			}
 		}
@@ -177,13 +206,14 @@ func Apply(s GameState, m Move) (GameState, error) {
 			out.Pending = &PendingOneOff{
 				PlayedBy:   played,
 				Card:       m.Card,
+				Target:     m.Target,
 				ScrapIndex: m.ScrapIndex,
 			}
 			out.Phase = PhaseAwaitingCounter
 			out.Active = opp
 			return out, nil
 		}
-		resolveOneOffWith(&out, m.Card, played, m.ScrapIndex)
+		resolveOneOffWith(&out, m.Card, played, m.ScrapIndex, m.Target)
 		return out, nil
 	case MoveCounter:
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
@@ -315,7 +345,7 @@ func resolvePending(s *GameState) {
 		return
 	}
 	// Resolve the original one-off's effect. The chain 2s go to scrap alongside.
-	resolveOneOffWith(s, pend.Card, pend.PlayedBy, pend.ScrapIndex)
+	resolveOneOffWith(s, pend.Card, pend.PlayedBy, pend.ScrapIndex, pend.Target)
 	// Append the chain 2s to scrap (resolveOneOff already scrapped the original + effect).
 	s.Scrap = append(s.Scrap, pend.CounterChain...)
 }
@@ -323,10 +353,10 @@ func resolvePending(s *GameState) {
 // resolveOneOff applies the effect of a one-off card played by `played` and
 // scraps the card itself, runs win check, and ends the turn.
 func resolveOneOff(s *GameState, c card.Card, played PlayerID) {
-	resolveOneOffWith(s, c, played, 0)
+	resolveOneOffWith(s, c, played, 0, nil)
 }
 
-func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex int) {
+func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex int, target *Target) {
 	s.Active = played
 	// Three: take the chosen scrap card into the played-by player's hand
 	// BEFORE appending the 3 to scrap (so ScrapIndex still refers to the
@@ -397,6 +427,45 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 		for i := 0; i < 2; i++ {
 			s.Players[i].Points = kept[i]
 		}
+	case card.Nine:
+		if target == nil {
+			break
+		}
+		tp := &s.Players[target.Owner]
+		var returned card.Card
+		var returnTo PlayerID
+		switch target.Zone {
+		case ZonePoints:
+			if target.Index < 0 || target.Index >= len(tp.Points) {
+				break
+			}
+			pe := tp.Points[target.Index]
+			tp.Points = removeAt(tp.Points, target.Index)
+			// Scrap any Jacks on the stack; point returns to its original Owner.
+			if len(pe.JackStack) > 0 {
+				s.Scrap = append(s.Scrap, pe.JackStack...)
+			}
+			returned = pe.Card
+			returnTo = pe.Owner
+		case ZonePermanents:
+			if target.Index < 0 || target.Index >= len(tp.Permanents) {
+				break
+			}
+			returned = tp.Permanents[target.Index]
+			tp.Permanents = removeAt(tp.Permanents, target.Index)
+			returnTo = target.Owner
+		}
+		// End turn FIRST so endTurn's frozen-clear on the new active player
+		// doesn't wipe the freeze we're about to set.
+		endTurn(s)
+		rp := &s.Players[returnTo]
+		rp.Hand = append(rp.Hand, returned)
+		frozenIdx := len(rp.Hand) - 1
+		if rp.FrozenIDs == nil {
+			rp.FrozenIDs = map[int]bool{}
+		}
+		rp.FrozenIDs[frozenIdx] = true
+		return
 	}
 	if checkWin(s, played) {
 		return
