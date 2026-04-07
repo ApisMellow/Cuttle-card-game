@@ -32,7 +32,7 @@ func LegalMoves(s GameState) []Move {
 		if active.FrozenIDs[i] {
 			continue
 		}
-		if c.Rank == card.Ace {
+		if c.Rank == card.Ace || c.Rank == card.Six {
 			moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i})
 		}
 		if c.Rank >= card.Ace && c.Rank <= card.Ten {
@@ -143,8 +143,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
-		// Task 13/14: only Ace is implemented as a one-off effect.
-		if m.Card.Rank != card.Ace {
+		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six {
 			return s, ErrIllegalMove
 		}
 		played := out.Active
@@ -255,6 +254,33 @@ func resolveOneOff(s *GameState, c card.Card, played PlayerID) {
 				s.Scrap = append(s.Scrap, pe.JackStack...)
 			}
 			pl.Points = nil
+		}
+	case card.Six:
+		// Scrap all royals and glasses-8s on both sides. Permanents
+		// slice only holds Q/K/glasses-8 (Jacks live in point stacks),
+		// so wiping it scraps every non-Jack royal. Jacks are then
+		// stripped from point stacks; each stripped point returns to
+		// its original Owner *before* its Jacks hit the scrap pile.
+		for i := 0; i < 2; i++ {
+			pl := &s.Players[i]
+			s.Scrap = append(s.Scrap, pl.Permanents...)
+			pl.Permanents = nil
+		}
+		var kept [2][]PointEntry
+		for i := 0; i < 2; i++ {
+			for _, pe := range s.Players[i].Points {
+				if len(pe.JackStack) == 0 {
+					kept[i] = append(kept[i], pe)
+					continue
+				}
+				s.Scrap = append(s.Scrap, pe.JackStack...)
+				pe.JackStack = nil
+				pe.JackOwners = nil
+				kept[pe.Owner] = append(kept[pe.Owner], pe)
+			}
+		}
+		for i := 0; i < 2; i++ {
+			s.Players[i].Points = kept[i]
 		}
 	}
 	if checkWin(s, played) {
