@@ -1,5 +1,26 @@
 package engine
 
+// INVARIANT: Jack-as-permanent / point ownership.
+//
+// A PointEntry always lives in the Points slice of its current *controller*
+// — the player who, right now, counts that point toward their score. When a
+// Jack is played onto an opponent's point, the entire PointEntry is
+// TRANSPLANTED from the victim's Points slice into the attacker's Points
+// slice, and the Jack is appended to the entry's JackStack (with the
+// attacker in JackOwners). `Owner` on the entry always records the ORIGINAL
+// owner (the player who played the point card).
+//
+// When the top Jack of a PointEntry is scrapped (via 2-as-scrap, 6, 9, etc.)
+// and that empties the JackStack, the PointEntry is transplanted back to
+// `Owner`'s Points slice. A 9 that bounces a point returns the point card to
+// `Owner`'s hand (jack(s) scrapped). A 6 that scraps a stack's jacks returns
+// the underlying point card to `Owner`'s Points slice.
+//
+// Consequence: PointTotal(p) is simply the sum of ranks of p.Points — there
+// is no cross-player lookup. `Controller()` is retained as a convenience but
+// is always equal to the index of the Players slice that currently contains
+// the entry.
+
 import "github.com/ApisMellow/cuttle/card"
 
 type PlayerID uint8

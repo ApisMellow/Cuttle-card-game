@@ -69,13 +69,30 @@ func LegalMoves(s GameState) []Move {
 		}
 		if c.Rank == card.Nine {
 			opp := s.Active.Other()
+			oppHasQueen := ownerHasQueen(s.Players[opp])
 			for j := range s.Players[opp].Points {
+				if oppHasQueen {
+					continue
+				}
 				tgt := Target{Owner: opp, Zone: ZonePoints, Index: j}
 				moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i, Target: &tgt})
 			}
-			for j := range s.Players[opp].Permanents {
+			for j, perm := range s.Players[opp].Permanents {
+				if oppHasQueen && perm.Rank != card.Queen {
+					continue
+				}
 				tgt := Target{Owner: opp, Zone: ZonePermanents, Index: j}
 				moves = append(moves, Move{Kind: MoveOneOff, Card: c, HandIndex: i, Target: &tgt})
+			}
+		}
+		if c.Rank == card.Jack {
+			opp := s.Active.Other()
+			oppHasQueen := ownerHasQueen(s.Players[opp])
+			if !oppHasQueen {
+				for j := range s.Players[opp].Points {
+					tgt := Target{Owner: opp, Zone: ZonePoints, Index: j}
+					moves = append(moves, Move{Kind: MovePlayPermanent, Card: c, HandIndex: i, JackTarget: &tgt})
+				}
 			}
 		}
 		if c.Rank == card.Three {
@@ -163,8 +180,38 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
+		if m.Card.Rank == card.Jack {
+			// Jack-as-permanent: steal an opponent point by transplanting
+			// the PointEntry to the attacker's Points slice. Subject to
+			// Queen protection.
+			if m.JackTarget == nil || m.JackTarget.Zone != ZonePoints {
+				return s, ErrIllegalMove
+			}
+			victim := m.JackTarget.Owner
+			if victim == out.Active {
+				return s, ErrIllegalMove
+			}
+			vp := &out.Players[victim]
+			if m.JackTarget.Index < 0 || m.JackTarget.Index >= len(vp.Points) {
+				return s, ErrIllegalMove
+			}
+			if ownerHasQueen(*vp) {
+				return s, ErrIllegalMove
+			}
+			pe := vp.Points[m.JackTarget.Index]
+			vp.Points = removeAt(vp.Points, m.JackTarget.Index)
+			pe.JackStack = append(pe.JackStack, m.Card)
+			pe.JackOwners = append(pe.JackOwners, out.Active)
+			p.Hand = removeAt(p.Hand, m.HandIndex)
+			out.Players[out.Active].Points = append(out.Players[out.Active].Points, pe)
+			out.PassesInARow = 0
+			if checkWin(&out, out.Active) {
+				return out, nil
+			}
+			endTurn(&out)
+			return out, nil
+		}
 		if m.Card.Rank != card.Queen && m.Card.Rank != card.King && m.Card.Rank != card.Eight {
-			// Jacks handled in a later task
 			return s, ErrIllegalMove
 		}
 		p.Hand = removeAt(p.Hand, m.HandIndex)
