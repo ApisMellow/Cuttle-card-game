@@ -8,6 +8,30 @@ import (
 	"github.com/ApisMellow/cuttle/engine"
 )
 
+// oneOffReference is the static side panel showing what each one-off does.
+// It's a quick lookup so a player learning the game doesn't have to memorise
+// every effect.
+var oneOffReference = []string{
+	"ONE-OFF EFFECTS",
+	"───────────────────────────",
+	"A  scrap ALL point cards",
+	"2  counter one-off, OR",
+	"   scrap a royal/glasses-8",
+	"3  take a card from scrap",
+	"4  opponent discards 2",
+	"5  draw 2 cards",
+	"6  scrap ALL royals + 8s",
+	"7  reveal top 2, play one",
+	"9  bounce a field card",
+	"   (frozen next turn)",
+	"───────────────────────────",
+	"PERMANENTS",
+	"8  glasses: see opp hand",
+	"J  steal an opp point",
+	"Q  protect your other cards",
+	"K  lower win threshold",
+}
+
 func Render(s engine.GameState) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== CUTTLE ===  Deck: %d  Scrap: %d\n\n", len(s.Deck), len(s.Scrap))
@@ -26,7 +50,54 @@ func Render(s engine.GameState) string {
 			fmt.Fprintf(&b, "Phase: %v\n", s.Phase)
 		}
 	}
+	return joinSideBySide(b.String(), strings.Join(oneOffReference, "\n"), 4)
+}
+
+// joinSideBySide places right beside left, separated by `gap` spaces.
+// The left column is padded to its widest line so the right column is flush.
+func joinSideBySide(left, right string, gap int) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	leftWidth := 0
+	for _, l := range leftLines {
+		if w := visibleWidth(l); w > leftWidth {
+			leftWidth = w
+		}
+	}
+	n := len(leftLines)
+	if len(rightLines) > n {
+		n = len(rightLines)
+	}
+	pad := strings.Repeat(" ", gap)
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		var l, r string
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		b.WriteString(l)
+		b.WriteString(strings.Repeat(" ", leftWidth-visibleWidth(l)))
+		if r != "" {
+			b.WriteString(pad)
+			b.WriteString(r)
+		}
+		b.WriteByte('\n')
+	}
 	return b.String()
+}
+
+// visibleWidth counts runes, which is correct for the ASCII + suit-glyph
+// content this renderer produces (each suit ♠♥♦♣ is one rune wide in a
+// monospace terminal).
+func visibleWidth(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
 }
 
 func renderPlayer(b *strings.Builder, s engine.GameState, p engine.PlayerID, label string) {

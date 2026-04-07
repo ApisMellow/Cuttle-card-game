@@ -29,7 +29,7 @@ func TestRender_BasicState(t *testing.T) {
 		Phase:  engine.PhaseNormal,
 	}
 	out := Render(s)
-	for _, want := range []string{"PLAYER 1", "PLAYER 2", "K♠", "9♥", "Q♦", "7♥", "10♦", "P1 TO MOVE"} {
+	for _, want := range []string{"PLAYER 1", "PLAYER 2", "K♠", "9♥", "Q♦", "7♥", "10♦", "P1 TO MOVE", "ONE-OFF EFFECTS", "scrap ALL point cards"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, out)
 		}
