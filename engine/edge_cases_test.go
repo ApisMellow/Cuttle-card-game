@@ -49,6 +49,12 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("27_NineBouncesPointUnderJackStack", caseF27)
 		t.Run("28_ScrappedQueenUnblocksJackTargets", caseF28)
 	})
+	t.Run("G_WinCheck", func(t *testing.T) {
+		t.Run("29_KingDropsThresholdInstantWin", caseG29)
+		t.Run("30_TwoScrapsJackReclaimsPointToWin", caseG30)
+		t.Run("31_SevenRevealPointPlayWins", caseG31)
+		t.Run("32_JackChainStealPushesNewControllerOverThreshold", caseG32)
+	})
 }
 
 // caseD16: 3 with empty scrap is not legal as a one-off. LegalMoves iterates
@@ -1389,5 +1395,214 @@ func caseF28(t *testing.T) {
 	moves := LegalMoves(s2)
 	if !hasJackPlay(moves, P2, 0) {
 		t.Errorf("after Queen is scrapped, Jack steal should be legal; moves=%+v", moves)
+	}
+}
+
+// caseG29: Playing a King that drops your threshold at or below your current
+// points ends the game on that play. P1 has 14 points (10 + 4) on the field
+// and no Kings (threshold 21). Playing a King lowers the threshold to 14,
+// which meets the new threshold → instant win on P1's own turn.
+//
+// JUDGMENT: RULES.md — "Kings lower your own threshold: 1 King → 14".
+// HasWon uses PointTotal >= Threshold(KingCount), and checkWin runs inside
+// MovePlayPermanent before endTurn, so the win must be observed immediately.
+func caseG29(t *testing.T) {
+	king := card.Card{Rank: card.King, Suit: card.Spades}
+	ten := card.Card{Rank: card.Ten, Suit: card.Diamonds}
+	four := card.Card{Rank: card.Four, Suit: card.Hearts}
+	s := twoPlayerStart([]card.Card{king}, nil, nil)
+	s.Players[P1].Points = []PointEntry{
+		{Card: ten, Owner: P1},
+		{Card: four, Owner: P1},
+	}
+	padDeckTo52(&s)
+	assertDeckCount(t, s, 52)
+
+	moves := LegalMoves(s)
+	playKing, ok := findMove(moves, func(m Move) bool {
+		return m.Kind == MovePlayPermanent && m.Card == king
+	})
+	if !ok {
+		t.Fatalf("expected MovePlayPermanent King to be legal, moves=%+v", moves)
+	}
+	s2, err := Apply(s, playKing)
+	if err != nil {
+		t.Fatalf("apply King: %v", err)
+	}
+	if s2.Phase != PhaseGameOver {
+		t.Fatalf("expected PhaseGameOver after King lowers threshold, got phase=%d", s2.Phase)
+	}
+	if s2.Winner == nil || *s2.Winner != P1 {
+		t.Fatalf("expected Winner=P1, got %+v", s2.Winner)
+	}
+}
+
+// caseG30: 2-as-scrap targeting a Jack on a stolen point returns the point
+// to its original owner; if that push brings the owner to threshold, the
+// game ends during 2-resolution on the owner's own turn.
+//
+// Setup: P1 has 1 King on the field (threshold 14). P1 currently has a 9 on
+// own side (score 9). P1 also originally owned a 5, which P2 has stolen with
+// a Jack (the PointEntry lives on P2.Points, Owner=P1). P1 plays a 2
+// targeting P2's Jack: the Jack is scrapped, and the 5 PointEntry is
+// transplanted back to P1. P1 now has 9+5 = 14 >= 14 → instant win.
+//
+// JUDGMENT: RULES.md — 2 may "scrap a target royal or glasses-8" and
+// clarifies Jacks on a point may also be targeted by a 2. checkWin in the
+// engine's Two/ZonePoints branch runs after the transplant, so the win is
+// observed on the 2's own resolution.
+func caseG30(t *testing.T) {
+	two := card.Card{Rank: card.Two, Suit: card.Spades}
+	nine := card.Card{Rank: card.Nine, Suit: card.Diamonds}
+	five := card.Card{Rank: card.Five, Suit: card.Hearts}
+	king := card.Card{Rank: card.King, Suit: card.Clubs}
+	jack := card.Card{Rank: card.Jack, Suit: card.Clubs}
+	stolen := PointEntry{
+		Card:       five,
+		Owner:      P1,
+		JackStack:  []card.Card{jack},
+		JackOwners: []PlayerID{P2},
+	}
+	s := twoPlayerStart([]card.Card{two}, nil, nil)
+	s.Players[P1].Points = []PointEntry{{Card: nine, Owner: P1}}
+	s.Players[P1].Permanents = []card.Card{king}
+	s.Players[P2].Points = []PointEntry{stolen}
+	padDeckTo52(&s)
+	assertDeckCount(t, s, 52)
+
+	// P2 has no 2 in hand → no counter phase; 2 resolves immediately.
+	moves := LegalMoves(s)
+	playTwo, ok := findMove(moves, func(m Move) bool {
+		if m.Kind != MoveOneOff || m.Card != two || m.Target == nil {
+			return false
+		}
+		return m.Target.Owner == P2 && m.Target.Zone == ZonePoints && m.Target.Index == 0
+	})
+	if !ok {
+		t.Fatalf("expected 2-as-scrap on P2's Jack-stack, moves=%+v", moves)
+	}
+	s2, err := Apply(s, playTwo)
+	if err != nil {
+		t.Fatalf("apply 2: %v", err)
+	}
+	if s2.Phase != PhaseGameOver {
+		t.Fatalf("expected PhaseGameOver after 2 reclaims point to threshold, got phase=%d", s2.Phase)
+	}
+	if s2.Winner == nil || *s2.Winner != P1 {
+		t.Fatalf("expected Winner=P1, got %+v", s2.Winner)
+	}
+}
+
+// caseG31: 7 reveals two cards; one of them, played as a point card via the
+// seven-pick sub-move, pushes the active player to threshold. The game ends
+// during seven-pick resolution on the active player's own turn.
+//
+// Setup: P1 has threshold 21 (no Kings). P1 has 19 points on the field
+// (10 + 9). Deck top two cards are 2♠ and arbitrary. P1 plays 7; the
+// seven-pick allows selecting 2♠ and playing it as a point card. 19+2 = 21.
+//
+// JUDGMENT: RULES.md — "7: Reveal the top 2 cards of the deck. Play one
+// immediately (as point, ...)". The engine's MoveSevenPick dispatches the
+// inner sub-move through Apply, and MovePlayPoint runs checkWin.
+func caseG31(t *testing.T) {
+	seven := card.Card{Rank: card.Seven, Suit: card.Spades}
+	ten := card.Card{Rank: card.Ten, Suit: card.Diamonds}
+	nine := card.Card{Rank: card.Nine, Suit: card.Hearts}
+	twoSpades := card.Card{Rank: card.Two, Suit: card.Spades}
+	filler := card.Card{Rank: card.Three, Suit: card.Clubs}
+	s := twoPlayerStart([]card.Card{seven}, nil, []card.Card{twoSpades, filler})
+	s.Players[P1].Points = []PointEntry{
+		{Card: ten, Owner: P1},
+		{Card: nine, Owner: P1},
+	}
+	padDeckTo52(&s)
+	assertDeckCount(t, s, 52)
+
+	// Play the 7. P2 has no 2, so 7 resolves straight into PhaseSevenChoosing.
+	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: seven, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("apply 7: %v", err)
+	}
+	if s1.Phase != PhaseSevenChoosing {
+		t.Fatalf("expected PhaseSevenChoosing, got phase=%d", s1.Phase)
+	}
+	// Find a MoveSevenPick whose inner move is MovePlayPoint of 2♠.
+	picks := LegalMoves(s1)
+	pick, ok := findMove(picks, func(m Move) bool {
+		if m.Kind != MoveSevenPick || m.Card != twoSpades || m.SubMove == nil {
+			return false
+		}
+		return m.SubMove.Kind == MovePlayPoint
+	})
+	if !ok {
+		t.Fatalf("expected MoveSevenPick playing 2♠ as point, got %+v", picks)
+	}
+	s2, err := Apply(s1, pick)
+	if err != nil {
+		t.Fatalf("apply seven-pick: %v", err)
+	}
+	if s2.Phase != PhaseGameOver {
+		t.Fatalf("expected PhaseGameOver after seven-pick point play to 21, got phase=%d", s2.Phase)
+	}
+	if s2.Winner == nil || *s2.Winner != P1 {
+		t.Fatalf("expected Winner=P1, got %+v", s2.Winner)
+	}
+}
+
+// caseG32: Jack chain-steal pushes the new controller over their threshold.
+// A Jack play is the new controller's own action during their own turn, so
+// the win check must fire immediately in MovePlayPermanent.
+//
+// Setup: P1 has 11 points (8 + 3) on own side, threshold 21 (no Kings). P2
+// has a point stack: a 10 owned by P2, currently topped with a P2 Jack
+// (i.e., P2 holds it — chain of length 1 where the owner re-stole it is
+// unnecessary; any Jack on the entry is fine because control transfers to
+// the new top). P1 plays a Jack targeting that entry: chain-steal transfers
+// the PointEntry to P1. P1 now has 11+10 = 21 → instant win.
+//
+// JUDGMENT: RULES.md — "A Jack may target a point card already under
+// another Jack (chain-steal)." The engine's MovePlayPermanent/Jack branch
+// calls checkWin after the transplant, matching "on your own action".
+func caseG32(t *testing.T) {
+	jackHand := card.Card{Rank: card.Jack, Suit: card.Spades}
+	jackP2 := card.Card{Rank: card.Jack, Suit: card.Hearts}
+	eight := card.Card{Rank: card.Eight, Suit: card.Diamonds}
+	three := card.Card{Rank: card.Three, Suit: card.Clubs}
+	ten := card.Card{Rank: card.Ten, Suit: card.Spades}
+	s := twoPlayerStart([]card.Card{jackHand}, nil, nil)
+	s.Players[P1].Points = []PointEntry{
+		{Card: eight, Owner: P1},
+		{Card: three, Owner: P1},
+	}
+	s.Players[P2].Points = []PointEntry{
+		{
+			Card:       ten,
+			Owner:      P2,
+			JackStack:  []card.Card{jackP2},
+			JackOwners: []PlayerID{P2},
+		},
+	}
+	padDeckTo52(&s)
+	assertDeckCount(t, s, 52)
+
+	moves := LegalMoves(s)
+	playJack, ok := findMove(moves, func(m Move) bool {
+		if m.Kind != MovePlayPermanent || m.Card != jackHand || m.JackTarget == nil {
+			return false
+		}
+		return m.JackTarget.Owner == P2 && m.JackTarget.Zone == ZonePoints && m.JackTarget.Index == 0
+	})
+	if !ok {
+		t.Fatalf("expected Jack chain-steal to be legal, moves=%+v", moves)
+	}
+	s2, err := Apply(s, playJack)
+	if err != nil {
+		t.Fatalf("apply Jack: %v", err)
+	}
+	if s2.Phase != PhaseGameOver {
+		t.Fatalf("expected PhaseGameOver after Jack chain-steal to threshold, got phase=%d", s2.Phase)
+	}
+	if s2.Winner == nil || *s2.Winner != P1 {
+		t.Fatalf("expected Winner=P1, got %+v", s2.Winner)
 	}
 }
