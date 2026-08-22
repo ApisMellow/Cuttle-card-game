@@ -152,6 +152,18 @@ func Apply(s GameState, m Move) (GameState, error) {
 		endTurn(&out)
 		return out, nil
 	case MovePass:
+		// Pass is only legal when the active player has no other action.
+		// LegalMoves emits MovePass solely as a fallback when no real move
+		// is available (apply.go LegalMoves: `if len(moves) == 0`); Apply
+		// enforces the same gate so callers cannot march toward stalemate
+		// while real moves remain.
+		if s.Phase == PhaseNormal {
+			for _, lm := range LegalMoves(s) {
+				if lm.Kind != MovePass {
+					return s, ErrIllegalMove
+				}
+			}
+		}
 		out.PassesInARow++
 		if out.PassesInARow >= 3 {
 			out.Phase = PhaseGameOver
@@ -162,6 +174,9 @@ func Apply(s GameState, m Move) (GameState, error) {
 	case MovePlayPoint:
 		p := &out.Players[out.Active]
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if p.FrozenIDs[m.HandIndex] {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank < card.Ace || m.Card.Rank > card.Ten {
@@ -178,6 +193,9 @@ func Apply(s GameState, m Move) (GameState, error) {
 	case MovePlayPermanent:
 		p := &out.Players[out.Active]
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if p.FrozenIDs[m.HandIndex] {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank == card.Jack {
@@ -227,6 +245,9 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
 			return s, ErrIllegalMove
 		}
+		if p.FrozenIDs[m.HandIndex] {
+			return s, ErrIllegalMove
+		}
 		if m.Target == nil || m.Target.Zone != ZonePoints {
 			return s, ErrIllegalMove
 		}
@@ -248,6 +269,9 @@ func Apply(s GameState, m Move) (GameState, error) {
 	case MoveOneOff:
 		p := &out.Players[out.Active]
 		if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+			return s, ErrIllegalMove
+		}
+		if p.FrozenIDs[m.HandIndex] {
 			return s, ErrIllegalMove
 		}
 		if m.Card.Rank != card.Ace && m.Card.Rank != card.Six && m.Card.Rank != card.Three && m.Card.Rank != card.Four && m.Card.Rank != card.Five && m.Card.Rank != card.Nine && m.Card.Rank != card.Two && m.Card.Rank != card.Seven {
