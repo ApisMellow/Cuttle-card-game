@@ -41,7 +41,7 @@ On your turn, take exactly one action. If the deck is empty and you cannot other
 | **4** | Opponent discards 2 cards of their choice from hand to scrap. If their hand has fewer than 2 cards, they discard whatever they have. |
 | **5** | Draw 2 cards and add them to your hand (respecting the 8-card limit). |
 | **6** | Scrap all royals and glasses-8s on both sides. |
-| **7** | Reveal the top 2 cards of the deck. Play one immediately (as point, scuttle, permanent, or one-off — normal restrictions apply). Return the other to the top of the deck. |
+| **7** | Reveal the top 2 cards of the deck. Play one immediately (as point, scuttle, permanent, or one-off — normal restrictions apply). Return the other to the top of the deck. If neither revealed card has a legal play, choose one to scrap; the other returns to the top of the deck. |
 | **9** | Return an opponent's field card (point or permanent) to their hand. That card cannot be played on their next turn. |
 
 ### Permanents

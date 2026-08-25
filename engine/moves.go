@@ -62,7 +62,7 @@ func (m Move) Describe(s GameState) string {
 		if m.SubMove != nil {
 			return fmt.Sprintf("7: %s", m.SubMove.Describe(s))
 		}
-		return "7: pick"
+		return fmt.Sprintf("7: no legal play — scrap %s", m.Card)
 	case MoveDiscardPair:
 		return fmt.Sprintf("discard hand[%d] and hand[%d]", m.DiscardA, m.DiscardB)
 	}

@@ -47,3 +47,19 @@ func TestClone_DeepCopiesPointsAndJackStacks(t *testing.T) {
 		t.Error("clone shared jack stack")
 	}
 }
+
+func TestPointEntry_Controller(t *testing.T) {
+	plain := PointEntry{Card: card.Card{Rank: card.Ten, Suit: card.Clubs}, Owner: P2}
+	if got := plain.Controller(); got != P2 {
+		t.Errorf("no jacks: Controller() = P%d, want P2", got+1)
+	}
+	stacked := PointEntry{
+		Card:       card.Card{Rank: card.Ten, Suit: card.Clubs},
+		Owner:      P1,
+		JackStack:  []card.Card{{Rank: card.Jack, Suit: card.Clubs}, {Rank: card.Jack, Suit: card.Hearts}},
+		JackOwners: []PlayerID{P2, P1},
+	}
+	if got := stacked.Controller(); got != P1 {
+		t.Errorf("stacked jacks: Controller() = P%d, want top jack's owner P1", got+1)
+	}
+}

@@ -182,7 +182,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.Card.Rank < card.Ace || m.Card.Rank > card.Ten {
 			return s, ErrIllegalMove
 		}
-		p.Hand = removeAt(p.Hand, m.HandIndex)
+		removeFromHand(p, m.HandIndex)
 		p.Points = append(p.Points, PointEntry{Card: m.Card, Owner: out.Active})
 		out.PassesInARow = 0
 		if checkWin(&out, out.Active) {
@@ -220,7 +220,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 			vp.Points = removeAt(vp.Points, m.JackTarget.Index)
 			pe.JackStack = append(pe.JackStack, m.Card)
 			pe.JackOwners = append(pe.JackOwners, out.Active)
-			p.Hand = removeAt(p.Hand, m.HandIndex)
+			removeFromHand(p, m.HandIndex)
 			out.Players[out.Active].Points = append(out.Players[out.Active].Points, pe)
 			out.PassesInARow = 0
 			if checkWin(&out, out.Active) {
@@ -232,7 +232,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if m.Card.Rank != card.Queen && m.Card.Rank != card.King && m.Card.Rank != card.Eight {
 			return s, ErrIllegalMove
 		}
-		p.Hand = removeAt(p.Hand, m.HandIndex)
+		removeFromHand(p, m.HandIndex)
 		p.Permanents = append(p.Permanents, m.Card)
 		out.PassesInARow = 0
 		if checkWin(&out, out.Active) {
@@ -259,7 +259,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if !m.Card.Beats(target.Card) {
 			return s, ErrIllegalMove
 		}
-		p.Hand = removeAt(p.Hand, m.HandIndex)
+		removeFromHand(p, m.HandIndex)
 		out.Scrap = append(out.Scrap, m.Card, target.Card)
 		out.Scrap = append(out.Scrap, target.JackStack...)
 		opp.Points = removeAt(opp.Points, m.Target.Index)
@@ -322,7 +322,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 			}
 		}
 		played := out.Active
-		p.Hand = removeAt(p.Hand, m.HandIndex)
+		removeFromHand(p, m.HandIndex)
 		out.PassesInARow = 0
 		// If the opponent has a non-frozen 2, enter PhaseAwaitingCounter.
 		opp := played.Other()
@@ -353,7 +353,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if p.FrozenIDs[m.HandIndex] {
 			return s, ErrIllegalMove
 		}
-		p.Hand = removeAt(p.Hand, m.HandIndex)
+		removeFromHand(p, m.HandIndex)
 		out.Pending.CounterChain = append(out.Pending.CounterChain, m.Card)
 		// Flip waiting player; if they can counter, stay in phase; else auto-resolve.
 		next := out.Active.Other()
@@ -378,7 +378,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 				return s, ErrIllegalMove
 			}
 			out.Scrap = append(out.Scrap, p.Hand[0])
-			p.Hand = removeAt(p.Hand, 0)
+			removeFromHand(p, 0)
 		} else {
 			if a < 0 || b < 0 || a >= n || b >= n || a == b {
 				return s, ErrIllegalMove
@@ -388,8 +388,8 @@ func Apply(s GameState, m Move) (GameState, error) {
 			}
 			// Remove higher index first so lower index remains valid.
 			ca, cb := p.Hand[a], p.Hand[b]
-			p.Hand = removeAt(p.Hand, b)
-			p.Hand = removeAt(p.Hand, a)
+			removeFromHand(p, b)
+			removeFromHand(p, a)
 			out.Scrap = append(out.Scrap, ca, cb)
 		}
 		played := out.Pending.PlayedBy
@@ -402,10 +402,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		if s.Phase != PhaseSevenChoosing || out.Pending == nil {
 			return s, ErrIllegalMove
 		}
-		if m.SubMove == nil {
-			return s, ErrIllegalMove
-		}
-		if m.SubMove.Kind == MoveDraw || m.SubMove.Kind == MovePass {
+		if m.SubMove != nil && (m.SubMove.Kind == MoveDraw || m.SubMove.Kind == MovePass) {
 			return s, ErrIllegalMove
 		}
 		rev := out.Pending.Revealed
@@ -418,6 +415,32 @@ func Apply(s GameState, m Move) (GameState, error) {
 		}
 		if chosenIdx < 0 {
 			return s, ErrIllegalMove
+		}
+		if m.SubMove == nil {
+			// Dead-end scrap: when NO revealed card has any legal play, the
+			// player scraps one revealed card and any other returns to the
+			// top of the deck. Only legal in that dead-end state.
+			for _, c := range rev {
+				if len(legalForCard(out, c)) > 0 {
+					return s, ErrIllegalMove
+				}
+			}
+			played := out.Pending.PlayedBy
+			var unchosen []card.Card
+			for i, c := range rev {
+				if i != chosenIdx {
+					unchosen = append(unchosen, c)
+				}
+			}
+			if len(unchosen) > 0 {
+				out.Deck = append(append([]card.Card(nil), unchosen...), out.Deck...)
+			}
+			out.Scrap = append(out.Scrap, m.Card)
+			out.Pending = nil
+			out.Phase = PhaseNormal
+			out.Active = played
+			endTurn(&out)
+			return out, nil
 		}
 		played := out.Pending.PlayedBy
 		// Push unchosen (if any) back to top of deck.
@@ -509,6 +532,14 @@ func legalSevenPickMoves(s GameState) []Move {
 			out = append(out, Move{Kind: MoveSevenPick, Card: c, SubMove: &sub})
 		}
 	}
+	if len(out) == 0 {
+		// Dead end: no revealed card has any legal play. The player must
+		// scrap one revealed card (SubMove nil); any other returns to the
+		// top of the deck.
+		for _, c := range s.Pending.Revealed {
+			out = append(out, Move{Kind: MoveSevenPick, Card: c})
+		}
+	}
 	return out
 }
 
@@ -572,16 +603,12 @@ func resolvePending(s *GameState) {
 	}
 	// Resolve the original one-off's effect. The chain 2s go to scrap alongside.
 	resolveOneOffWith(s, pend.Card, pend.PlayedBy, pend.ScrapIndex, pend.Target)
-	// Append the chain 2s to scrap (resolveOneOff already scrapped the original + effect).
+	// Append the chain 2s to scrap (resolveOneOffWith already scrapped the original + effect).
 	s.Scrap = append(s.Scrap, pend.CounterChain...)
 }
 
-// resolveOneOff applies the effect of a one-off card played by `played` and
-// scraps the card itself, runs win check, and ends the turn.
-func resolveOneOff(s *GameState, c card.Card, played PlayerID) {
-	resolveOneOffWith(s, c, played, 0, nil)
-}
-
+// resolveOneOffWith applies the effect of a one-off card played by `played`
+// and scraps the card itself, runs win check, and ends the turn.
 func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex int, target *Target) {
 	s.Active = played
 	// Three: take the chosen scrap card into the played-by player's hand
@@ -747,6 +774,34 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 		return
 	}
 	endTurn(s)
+}
+
+// removeFromHand removes hand index i and remaps FrozenIDs so each frozen
+// mark stays on the card it froze: the removed card's mark disappears, and
+// marks above i shift down by one. Without this, any removal below a frozen
+// index leaves the mark on the wrong card (e.g. playing a 7 and then having
+// the revealed card injected at a stale frozen index).
+func removeFromHand(p *PlayerState, i int) {
+	p.Hand = removeAt(p.Hand, i)
+	if p.FrozenIDs == nil {
+		return
+	}
+	remapped := make(map[int]bool, len(p.FrozenIDs))
+	for k, v := range p.FrozenIDs {
+		switch {
+		case k == i:
+			// the removed card's freeze goes with it
+		case k > i:
+			remapped[k-1] = v
+		default:
+			remapped[k] = v
+		}
+	}
+	if len(remapped) == 0 {
+		p.FrozenIDs = nil
+		return
+	}
+	p.FrozenIDs = remapped
 }
 
 func removeAt[T any](xs []T, i int) []T {
