@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"strconv"
@@ -14,34 +15,42 @@ import (
 )
 
 func main() {
-	state := newGame()
-	reader := bufio.NewReader(os.Stdin)
+	// A read error (e.g. EOF on ctrl-D) simply ends the session.
+	_ = run(newGame(), os.Stdin, os.Stdout)
+}
+
+// run drives the hot-seat REPL loop over the given state, reading move
+// choices from in and rendering to out, until the game ends or in is
+// exhausted. Extracted from main so tests can script a session.
+func run(state engine.GameState, in io.Reader, out io.Writer) error {
+	reader := bufio.NewReader(in)
 	for state.Phase != engine.PhaseGameOver {
-		fmt.Print("\033[H\033[2J") // clear screen
-		fmt.Println(render.Render(state))
+		fmt.Fprint(out, "\033[H\033[2J") // clear screen
+		fmt.Fprintln(out, render.Render(state))
 		moves := engine.LegalMoves(state)
 		for i, m := range moves {
-			fmt.Printf("  %2d) %s\n", i+1, m.Describe(state))
+			fmt.Fprintf(out, "  %2d) %s\n", i+1, m.Describe(state))
 		}
-		fmt.Print("> ")
+		fmt.Fprint(out, "> ")
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return
+			return err
 		}
 		idx, err := strconv.Atoi(strings.TrimSpace(line))
 		if err != nil || idx < 1 || idx > len(moves) {
-			fmt.Println("invalid choice")
+			fmt.Fprintln(out, "invalid choice")
 			continue
 		}
 		next, err := engine.Apply(state, moves[idx-1])
 		if err != nil {
-			fmt.Printf("engine error: %v\n", err)
+			fmt.Fprintf(out, "engine error: %v\n", err)
 			continue
 		}
 		state = next
 	}
-	fmt.Print("\033[H\033[2J")
-	fmt.Println(render.Render(state))
+	fmt.Fprint(out, "\033[H\033[2J")
+	fmt.Fprintln(out, render.Render(state))
+	return nil
 }
 
 func newGame() engine.GameState {

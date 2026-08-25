@@ -202,3 +202,86 @@ func TestSeven_UnchosenReturnsToDeckTop(t *testing.T) {
 		t.Errorf("expected king permanent, got %+v", s3.Players[P1].Permanents)
 	}
 }
+
+// Regression: a frozen hand index must be remapped when the 7 leaves the
+// hand, or the revealed card injected at the stale index is wrongly frozen
+// (LegalMoves offered the pick but Apply rejected it).
+func TestSeven_FrozenIndexRemappedWhenSevenPlayed(t *testing.T) {
+	s := twoPlayerStart(
+		[]card.Card{{Rank: card.Seven, Suit: card.Clubs}, {Rank: card.Five, Suit: card.Hearts}},
+		nil,
+		[]card.Card{{Rank: card.Eight, Suit: card.Spades}, {Rank: card.Three, Suit: card.Diamonds}},
+	)
+	s.Players[0].FrozenIDs = map[int]bool{1: true} // 5♥ frozen by an earlier 9
+	next, err := Apply(s, Move{Kind: MoveOneOff, Card: card.Card{Rank: card.Seven, Suit: card.Clubs}, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("playing 7: %v", err)
+	}
+	if next.Phase != PhaseSevenChoosing {
+		t.Fatalf("phase = %d, want PhaseSevenChoosing", next.Phase)
+	}
+	if !next.Players[0].FrozenIDs[0] || next.Players[0].FrozenIDs[1] {
+		t.Errorf("FrozenIDs = %v, want frozen mark remapped to index 0", next.Players[0].FrozenIDs)
+	}
+	// Every offered pick must be applicable; in particular playing the
+	// revealed 8♠, which is injected at index 1 (the stale frozen index).
+	moves := LegalMoves(next)
+	if len(moves) == 0 {
+		t.Fatal("no seven picks offered")
+	}
+	for _, m := range moves {
+		if _, err := Apply(next, m); err != nil {
+			t.Errorf("offered pick %q rejected: %v", m.Describe(next), err)
+		}
+	}
+}
+
+// Regression: when no revealed card has a legal play (here two Jacks with
+// no opponent points to steal), the player scraps one revealed card and the
+// other returns to the top of the deck; the game must not dead-end.
+func TestSeven_NoLegalPlayForRevealed_ScrapsChosen(t *testing.T) {
+	s := twoPlayerStart(
+		[]card.Card{{Rank: card.Seven, Suit: card.Clubs}},
+		nil,
+		[]card.Card{{Rank: card.Jack, Suit: card.Spades}, {Rank: card.Jack, Suit: card.Hearts}},
+	)
+	next, err := Apply(s, Move{Kind: MoveOneOff, Card: card.Card{Rank: card.Seven, Suit: card.Clubs}, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("playing 7: %v", err)
+	}
+	moves := LegalMoves(next)
+	if len(moves) != 2 {
+		t.Fatalf("got %d moves, want 2 scrap picks: %+v", len(moves), moves)
+	}
+	for _, m := range moves {
+		if m.Kind != MoveSevenPick || m.SubMove != nil {
+			t.Fatalf("expected scrap pick (nil SubMove), got %+v", m)
+		}
+	}
+	end, err := Apply(next, moves[0]) // scrap J♠
+	if err != nil {
+		t.Fatalf("scrap pick: %v", err)
+	}
+	if end.Phase != PhaseNormal || end.Active != P2 {
+		t.Errorf("phase/active = %d/P%d, want PhaseNormal/P2", end.Phase, end.Active+1)
+	}
+	if len(end.Scrap) != 2 || end.Scrap[1] != (card.Card{Rank: card.Jack, Suit: card.Spades}) {
+		t.Errorf("scrap = %v, want [7♣ J♠]", end.Scrap)
+	}
+	if len(end.Deck) != 1 || end.Deck[0] != (card.Card{Rank: card.Jack, Suit: card.Hearts}) {
+		t.Errorf("deck = %v, want [J♥] back on top", end.Deck)
+	}
+	// A scrap pick must be illegal when a revealed card IS playable.
+	s2 := twoPlayerStart(
+		[]card.Card{{Rank: card.Seven, Suit: card.Clubs}},
+		nil,
+		[]card.Card{{Rank: card.Eight, Suit: card.Spades}, {Rank: card.Jack, Suit: card.Hearts}},
+	)
+	next2, err := Apply(s2, Move{Kind: MoveOneOff, Card: card.Card{Rank: card.Seven, Suit: card.Clubs}, HandIndex: 0})
+	if err != nil {
+		t.Fatalf("playing 7: %v", err)
+	}
+	if _, err := Apply(next2, Move{Kind: MoveSevenPick, Card: card.Card{Rank: card.Jack, Suit: card.Hearts}}); err == nil {
+		t.Error("scrap pick should be illegal while the revealed 8♠ is playable")
+	}
+}
