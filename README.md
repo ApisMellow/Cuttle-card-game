@@ -41,6 +41,24 @@ go build -o cuttle ./cmd/cuttle
 ./cuttle
 ```
 
+### Seeds and replays
+
+Every game is reproducible. The shuffle comes from a seed shown at the top
+of every screen; pass one explicitly to replay a specific deal:
+
+```sh
+go run ./cmd/cuttle --seed 42
+```
+
+When a game finishes, the seed and the sequence of chosen moves are saved
+to `cuttle-replay-<seed>.json` (override the path with `--record`). The
+`moves` array holds 0-based indices into the legal-move list at each step.
+Watch a saved game back step by step with:
+
+```sh
+go run ./cmd/cuttle --replay cuttle-replay-42.json
+```
+
 ### How it plays
 
 - Hot-seat: both players share the terminal. No hidden hands — pass the keyboard.
