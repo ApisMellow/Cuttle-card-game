@@ -7,7 +7,7 @@ plan. Module path is `github.com/ApisMellow/cuttle` (GitHub repo
 
 ## This engine is the rules canon
 
-`~/dev/cuttle-web` compiles this package to WASM and implements zero game
+`cuttle-web` (the web client) compiles this package to WASM and implements zero game
 rules itself — every rule question is answered by `LegalMoves`/`Apply`
 output. Rule changes happen here, never in the UI. `cuttle-web` consumes
 tagged releases of this module; locally it may also use a `go.mod`
