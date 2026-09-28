@@ -1,2 +1,6 @@
 .worktrees/
 cuttle-replay-*.json
+
+# Workflow plans stay local
+docs/plans/
+docs/superpowers/
