@@ -701,18 +701,18 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 			if len(pe.JackStack) == 0 {
 				break
 			}
-			// Pop the top Jack.
+			// Pop only the top Jack; buried Jacks stay. Control passes to
+			// the next Jack's owner, or to the original Owner if the stack
+			// is now empty, and the entry moves to that player's side so
+			// scoring follows it. The win check below covers only the
+			// player who played the 2 (wins are checked on your own turn).
 			top := pe.JackStack[len(pe.JackStack)-1]
 			pe.JackStack = pe.JackStack[:len(pe.JackStack)-1]
 			pe.JackOwners = pe.JackOwners[:len(pe.JackOwners)-1]
 			s.Scrap = append(s.Scrap, top)
-			if len(pe.JackStack) == 0 {
-				// Transplant point back to original Owner.
+			if ctrl := pe.Controller(); ctrl != target.Owner {
 				tp.Points = removeAt(tp.Points, target.Index)
-				s.Players[pe.Owner].Points = append(s.Players[pe.Owner].Points, pe)
-				if checkWin(s, pe.Owner) {
-					return
-				}
+				s.Players[ctrl].Points = append(s.Players[ctrl].Points, pe)
 			} else {
 				tp.Points[target.Index] = pe
 			}

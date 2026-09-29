@@ -42,13 +42,13 @@ On your turn, take exactly one action. If the deck is empty and you cannot other
 | **5** | Draw 2 cards and add them to your hand (respecting the 8-card limit). |
 | **6** | Scrap all royals and glasses-8s on both sides. |
 | **7** | Reveal the top 2 cards of the deck. Play one immediately (as point, scuttle, permanent, or one-off — normal restrictions apply). Return the other to the top of the deck. If neither revealed card has a legal play, choose one to scrap; the other returns to the top of the deck. |
-| **9** | Return an opponent's field card (point or permanent) to their hand. That card cannot be played on their next turn. |
+| **9** | Return an opponent's field card (point or permanent) to its **original owner's** hand. Any Jacks on a returned point card are scrapped. The returned card is frozen: its owner cannot play it during the turn that immediately follows the 9. (If you return your own stolen point card, that turn is your opponent's, so the freeze has no effect.) |
 
 ### Permanents
 | Card | Effect |
 |---|---|
 | **8 (glasses)** | While in play, your opponent's hand is visible to you. Any 8 may be played this way. |
-| **J** | Played on top of an opponent's point card to **steal** it onto your side (it now counts for you). If the Jack is later scrapped or stolen back, the underlying point card returns to its original owner. A Jack may target a point card already under another Jack (chain-steal). |
+| **J** | Played on top of an opponent's point card to **steal** it onto your side (it now counts for you). A Jack may target a point card already under another Jack (chain-steal); Jacks stack, and each one flips control. |
 | **Q** | Your **other** cards cannot be targeted by your opponent's cards. The Queen does not protect itself, does not block board-wipes (Ace, Six), and does not block scuttling. **A Queen does block Jacks**: a protected point card cannot be stolen. |
 | **K** | Lowers your win threshold. Stacks: 1K=14, 2K=10, 3K=7, 4K=5. |
 
@@ -56,5 +56,7 @@ On your turn, take exactly one action. If the deck is empty and you cannot other
 - **2 vs. 2**: 2s can counter 2s. Counter chains resolve last-in-first-out.
 - **Jacks vs. Queens**: a Queen on your side prevents your point cards from being stolen by Jacks.
 - **Jack chain-steal**: a Jack may be played onto a point card that already has a Jack on it; control transfers to the new Jack's owner.
+- **2 vs. a Jack stack**: a 2 removes only the **top** Jack (to scrap); buried Jacks can't be targeted. Control passes to the owner of the next Jack down, or to the card's original owner if no Jacks remain. The point card moves to the new controller's side and counts for them.
+- **6 vs. Jacks**: a 6 scraps every Jack in every stack; each point card returns to its original owner.
 - **Glasses 8**: any 8, regardless of suit.
 - **Win check**: only on your own turn, after your action resolves. Counters (2s) cannot grant points, so winning off-turn is not possible.

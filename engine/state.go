@@ -10,9 +10,10 @@ package engine
 // attacker in JackOwners). `Owner` on the entry always records the ORIGINAL
 // owner (the player who played the point card).
 //
-// When the top Jack of a PointEntry is scrapped (via 2-as-scrap, 6, 9, etc.)
-// and that empties the JackStack, the PointEntry is transplanted back to
-// `Owner`'s Points slice. A 9 that bounces a point returns the point card to
+// A 2 that targets a Jack stack pops only the top Jack (buried Jacks can't be
+// targeted). Control passes to the owner of the next Jack down, or to
+// `Owner` if the stack is now empty, and the PointEntry is transplanted into
+// that new controller's Points slice. A 9 that bounces a point returns the point card to
 // `Owner`'s hand (jack(s) scrapped). A 6 that scraps a stack's jacks returns
 // the underlying point card to `Owner`'s Points slice.
 //
