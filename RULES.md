@@ -54,6 +54,7 @@ On your turn, take exactly one action. If the deck is empty and you cannot other
 
 ## Notes / Clarifications
 - **2 vs. 2**: 2s can counter 2s. Counter chains resolve last-in-first-out.
+- **One-off timing**: a one-off takes effect at once and is then scrapped, and that ends your turn (a 5's two cards go straight into your hand). Your opponent gets a chance to counter only if they hold a 2; if they don't, the effect simply happens and play passes to them.
 - **Jacks vs. Queens**: a Queen on your side prevents your point cards from being stolen by Jacks.
 - **Jack chain-steal**: a Jack may be played onto a point card that already has a Jack on it; control transfers to the new Jack's owner.
 - **2 vs. a Jack stack**: a 2 removes only the **top** Jack (to scrap); buried Jacks can't be targeted. Control passes to the owner of the next Jack down, or to the card's original owner if no Jacks remain. The point card moves to the new controller's side and counts for them.
