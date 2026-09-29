@@ -1137,25 +1137,18 @@ func caseF24(t *testing.T) {
 	}
 }
 
-// caseF25: Scrapping the top Jack from a 2-Jack stack (via 2-as-scrap). The
-// top Jack goes to the scrap pile; the remaining Jack still controls the
-// underlying point. The PointEntry stays on the side of whoever owned the
-// *new* top Jack (here: the Jack that remains), because only an empty
-// JackStack triggers a transplant back to Owner.
+// caseF25: Scrapping the top Jack from a 2-Jack stack (via 2-as-scrap).
 //
-// JUDGMENT: The 2-as-scrap branch in apply.go pops exactly one Jack (the top
-// JackStack entry), scraps it, and only re-transplants the entry to its
-// original Owner if the stack empties. With a 2-jack stack, after popping one
-// the stack still has one Jack; the entry stays put on the current side.
-// Setup: P2 owns a 7 that was stolen first by P2's own side via J_bottom?
-// No — P2 is owner, so the bottom Jack must be P1's (stole from P2). Then P2
-// re-stole with J_top. Entry currently sits on P2's Points (since top jack
-// owner = P2). P1 plays 2 targeting it, pops J_top. Remaining J_bottom owned
-// by P1 ⇒ entry should transplant? No: the code does NOT re-evaluate
-// controller/side on pop, it only transplants when the stack becomes empty.
-// This means after the pop the entry still sits in P2's Points slice even
-// though its new controller is P1. Verify the engine's actual behavior and
-// document the result as a finding if mismatched.
+// RULING: a 2 removes only the TOP Jack. Control passes to the owner of the
+// next Jack down (or to the original owner if none remain), and the point
+// card physically moves to the new controller's Points slice so scoring
+// follows it.
+//
+// Setup: P2 owns a 7. P1 stole it (J_bottom), P2 re-stole it (J_top), so the
+// entry sits on P2's side. P1 plays a 2 on the stack, popping J_top. The
+// remaining J_bottom is P1's, so the 7 must move to P1's side and count for
+// P1. (The engine previously left the entry on P2's side whenever Jacks
+// remained, so P2 kept scoring a point P1 controlled.)
 func caseF25(t *testing.T) {
 	two := card.Card{Rank: card.Two, Suit: card.Spades}
 	jBot := card.Card{Rank: card.Jack, Suit: card.Clubs}  // played first, by P1 (stole from P2)
@@ -1174,17 +1167,16 @@ func caseF25(t *testing.T) {
 	if err != nil {
 		t.Fatalf("P1 two-as-scrap: %v", err)
 	}
-	// Entry should still exist exactly once on the field.
-	total := len(s1.Players[P1].Points) + len(s1.Players[P2].Points)
-	if total != 1 {
-		t.Fatalf("expected exactly 1 PointEntry on the field, got %d (P1=%+v P2=%+v)", total, s1.Players[P1].Points, s1.Players[P2].Points)
+	// The point must have moved to P1's side (the new controller).
+	if len(s1.Players[P2].Points) != 0 {
+		t.Errorf("P2 should no longer hold the 7, got %+v", s1.Players[P2].Points)
 	}
-	// Find the entry and verify.
-	var pe PointEntry
-	if len(s1.Players[P2].Points) == 1 {
-		pe = s1.Players[P2].Points[0]
-	} else {
-		pe = s1.Players[P1].Points[0]
+	if len(s1.Players[P1].Points) != 1 {
+		t.Fatalf("P1 (remaining Jack's owner) should now hold the 7, got %+v", s1.Players[P1].Points)
+	}
+	pe := s1.Players[P1].Points[0]
+	if PointTotal(s1.Players[P1]) != 7 || PointTotal(s1.Players[P2]) != 0 {
+		t.Errorf("scoring should follow the point: P1=%d P2=%d, want 7/0", PointTotal(s1.Players[P1]), PointTotal(s1.Players[P2]))
 	}
 	if pe.Card != seven {
 		t.Errorf("underlying point should still be the 7, got %+v", pe.Card)
@@ -1463,9 +1455,9 @@ func caseG29(t *testing.T) {
 // transplanted back to P1. P1 now has 9+5 = 14 >= 14 → instant win.
 //
 // JUDGMENT: RULES.md — 2 may "scrap a target royal or glasses-8" and
-// clarifies Jacks on a point may also be targeted by a 2. checkWin in the
-// engine's Two/ZonePoints branch runs after the transplant, so the win is
-// observed on the 2's own resolution.
+// clarifies Jacks on a point may also be targeted by a 2. The shared
+// checkWin at the end of one-off resolution runs after the transplant, so
+// the win is observed on the 2's own resolution.
 func caseG30(t *testing.T) {
 	two := card.Card{Rank: card.Two, Suit: card.Spades}
 	nine := card.Card{Rank: card.Nine, Suit: card.Diamonds}

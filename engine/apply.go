@@ -701,18 +701,19 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 			if len(pe.JackStack) == 0 {
 				break
 			}
-			// Pop the top Jack.
+			// Pop only the top Jack; buried Jacks stay. Control passes to
+			// the next Jack's owner, or to the original Owner if the stack
+			// is now empty, and the entry moves to that player's side so
+			// scoring follows it. The win check below covers the player
+			// who played the 2; if the pop takes the opponent to their
+			// threshold, they win at the start of their turn (endTurn).
 			top := pe.JackStack[len(pe.JackStack)-1]
 			pe.JackStack = pe.JackStack[:len(pe.JackStack)-1]
 			pe.JackOwners = pe.JackOwners[:len(pe.JackOwners)-1]
 			s.Scrap = append(s.Scrap, top)
-			if len(pe.JackStack) == 0 {
-				// Transplant point back to original Owner.
+			if ctrl := pe.Controller(); ctrl != target.Owner {
 				tp.Points = removeAt(tp.Points, target.Index)
-				s.Players[pe.Owner].Points = append(s.Players[pe.Owner].Points, pe)
-				if checkWin(s, pe.Owner) {
-					return
-				}
+				s.Players[ctrl].Points = append(s.Players[ctrl].Points, pe)
 			} else {
 				tp.Points[target.Index] = pe
 			}
@@ -759,7 +760,9 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 			returnTo = target.Owner
 		}
 		// End turn FIRST so endTurn's frozen-clear on the new active player
-		// doesn't wipe the freeze we're about to set.
+		// doesn't wipe the freeze we're about to set. endTurn's start-of-turn
+		// win check runs before the card returns to hand; that is safe
+		// because a card in hand never counts toward points.
 		endTurn(s)
 		rp := &s.Players[returnTo]
 		rp.Hand = append(rp.Hand, returned)
@@ -822,10 +825,19 @@ func checkWin(s *GameState, p PlayerID) bool {
 	return false
 }
 
-// endTurn advances Active and clears the new active player's frozen marks.
+// endTurn advances Active, clears the new active player's frozen marks, then
+// runs the start-of-turn win check. A player can reach their threshold during
+// the opponent's turn (the opponent pops their own Jack with a 2, or plays a
+// 6); there is no off-turn win, so that player wins here, as their turn
+// begins and before LegalMoves offers them anything.
+//
+// endTurn is the only place a turn begins. A counter window flips Active
+// without calling it, so this check never fires mid-chain; it runs once the
+// chain has resolved and the turn actually passes.
 func endTurn(s *GameState) {
 	s.Active = s.Active.Other()
 	s.Players[s.Active].FrozenIDs = nil
+	checkWin(s, s.Active)
 }
 
 func clone(s GameState) GameState {
