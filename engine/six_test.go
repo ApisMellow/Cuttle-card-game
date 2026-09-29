@@ -104,9 +104,9 @@ func TestApply_SixOneOff_ScrapsJackReturnsPoint(t *testing.T) {
 }
 
 func TestApply_SixOneOff_JackReturnWinsForOwner(t *testing.T) {
-	// P1 is active and plays a six. P2 has a stolen 10 sitting under a P1
-	// Jack. When the Jack is scrapped the 10 returns to P2, but win checks
-	// only fire for the active player, so no win.
+	// P1 is active and plays a six. P1's 7 sits on P2's side under a P2
+	// Jack; scrapping the Jack returns it to P1, who wins on its own action.
+	// (For the six handing the opponent a win, see win_timing_test.go.)
 	six := card.Card{Rank: card.Six, Suit: card.Clubs}
 	s := twoPlayerStart([]card.Card{six}, nil, nil)
 	s.Players[P2].Hand = []card.Card{{Rank: card.Five, Suit: card.Clubs}}

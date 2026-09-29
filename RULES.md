@@ -9,8 +9,8 @@ Two-player card game played with a standard 52-card deck.
 - Each player has their own field with two zones: **point cards** and **permanents**.
 
 ## Win Condition
-- A player wins when they have **21 or more points** on their side of the field at the end of their own action.
-- Wins are only checked on your own turn. The 2 (counter) is the only card playable on the opponent's turn, and a counter cannot add points, so an off-turn win is impossible.
+- A player wins when they have **21 or more points** on their side of the field at the end of their own action, or at the start of their turn.
+- You never win during your opponent's turn. If you reach your target during your opponent's turn, you win at the start of your next turn.
 - **Kings** lower your own threshold: 1 King → 14, 2 Kings → 10, 3 Kings → 7, 4 Kings → 5.
 
 ## Hand Limit
@@ -59,4 +59,4 @@ On your turn, take exactly one action. If the deck is empty and you cannot other
 - **2 vs. a Jack stack**: a 2 removes only the **top** Jack (to scrap); buried Jacks can't be targeted. Control passes to the owner of the next Jack down, or to the card's original owner if no Jacks remain. The point card moves to the new controller's side and counts for them.
 - **6 vs. Jacks**: a 6 scraps every Jack in every stack; each point card returns to its original owner.
 - **Glasses 8**: any 8, regardless of suit.
-- **Win check**: only on your own turn, after your action resolves. Counters (2s) cannot grant points, so winning off-turn is not possible.
+- **Win check**: after your action resolves, and again at the start of your turn. Your opponent's action can hand you points (a 2 popping their own Jack, or a 6), but you win only once your turn begins.

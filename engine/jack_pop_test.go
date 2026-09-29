@@ -15,8 +15,10 @@ import (
 //   - The PointEntry physically moves into the new controller's Points slice,
 //     so PointTotal follows it.
 //   - Buried Jacks cannot be targeted.
-//   - Wins are checked only for the player who played the 2 (RULES.md: wins
-//     are only checked on your own turn).
+//   - The player who played the 2 wins if the pop takes them to their
+//     threshold. If the pop instead takes the opponent there, the opponent
+//     does not win off-turn; they win at the start of their next turn
+//     (win_timing_test.go).
 
 var (
 	popTwo = card.Card{Rank: card.Two, Suit: card.Spades}
@@ -79,7 +81,7 @@ func TestTwoPopsTopJack(t *testing.T) {
 		wantP2     int
 		wantWinner *PlayerID
 	}
-	p1 := P1
+	p1, p2 := P1, P2
 	seven := pc(card.Seven, card.Diamonds)
 	five := pc(card.Five, card.Hearts)
 	ten := pc(card.Ten, card.Spades)
@@ -168,16 +170,20 @@ func TestTwoPopsTopJack(t *testing.T) {
 		{
 			// P1 pops its own Jack (legal: a 2 may target a Jack on either
 			// side). The 9 returns to P2, taking P2 to 6 + 9 = 15 over its
-			// King threshold of 14 — but it is P1's turn, so no one wins.
-			name:   "ActorPopsOwnJack_OpponentOverThreshold_NoOffTurnWin",
-			actor:  P1,
-			p1:     []PointEntry{{Card: nine, Owner: P2, JackStack: []card.Card{popJC}, JackOwners: []PlayerID{P1}}},
-			p2:     []PointEntry{{Card: pc(card.Six, card.Diamonds), Owner: P2}},
-			p2Perm: []card.Card{popKC},
-			target: Target{Owner: P1, Zone: ZonePoints, Index: 0},
-			point:  nine, wantSide: P2,
-			popped: popJC,
-			wantP1: 0, wantP2: 15,
+			// King threshold of 14. P1 does not win and P2 does not win
+			// off-turn; the turn passes and P2 wins at the start of its turn.
+			name:       "ActorPopsOwnJack_OpponentOverThreshold_WinsAtStartOfTurn",
+			actor:      P1,
+			p1:         []PointEntry{{Card: nine, Owner: P2, JackStack: []card.Card{popJC}, JackOwners: []PlayerID{P1}}},
+			p2:         []PointEntry{{Card: pc(card.Six, card.Diamonds), Owner: P2}},
+			p2Perm:     []card.Card{popKC},
+			target:     Target{Owner: P1, Zone: ZonePoints, Index: 0},
+			point:      nine,
+			wantSide:   P2,
+			popped:     popJC,
+			wantP1:     0,
+			wantP2:     15,
+			wantWinner: &p2,
 		},
 	}
 
@@ -239,6 +245,15 @@ func TestTwoPopsTopJack(t *testing.T) {
 			if c.wantWinner != nil {
 				if s1.Phase != PhaseGameOver || s1.Winner == nil || *s1.Winner != *c.wantWinner {
 					t.Errorf("want Winner=%v in PhaseGameOver, got phase=%v winner=%v", *c.wantWinner, s1.Phase, s1.Winner)
+				}
+				// The winner is always the player whose turn it is: the actor
+				// winning on its own action, or the opponent winning as its
+				// turn begins.
+				if s1.Active != *c.wantWinner {
+					t.Errorf("winner %v should be the active player, Active=%v", *c.wantWinner, s1.Active)
+				}
+				if LegalMoves(s1) != nil {
+					t.Errorf("game over must offer no moves, got %+v", LegalMoves(s1))
 				}
 			} else {
 				if s1.Winner != nil || s1.Phase != PhaseNormal {
